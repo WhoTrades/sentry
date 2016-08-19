@@ -23,19 +23,20 @@ from django.utils.translation import ugettext_lazy as _
 
 from sentry.app import buffer
 from sentry.constants import (
-    DEFAULT_LOGGER_NAME, LOG_LEVELS, MAX_CULPRIT_LENGTH, EVENT_ORDERING_KEY,
+    DEFAULT_LOGGER_NAME, EVENT_ORDERING_KEY, LOG_LEVELS, MAX_CULPRIT_LENGTH
 )
 from sentry.db.models import (
-    BaseManager, BoundedIntegerField, BoundedPositiveIntegerField,
-    BoundedBigIntegerField, FlexibleForeignKey, Model, GzippedDictField,
+    BaseManager, BoundedBigIntegerField, BoundedIntegerField,
+    BoundedPositiveIntegerField, FlexibleForeignKey, GzippedDictField, Model,
     sane_repr
 )
 from sentry.utils.http import absolute_uri
-from sentry.utils.strings import truncatechars, strip
-from sentry.utils.numbers import base32_encode, base32_decode
+from sentry.utils.numbers import base32_decode, base32_encode
+from sentry.utils.strings import strip, truncatechars
 
+logger = logging.getLogger(__name__)
 
-_short_id_re = re.compile(r'^(.*?)(?:[\s_-])([A-Za-z0-9]+)$')
+_short_id_re = re.compile(r'^(.*?)(?:[\s_-])([A-Za-z0-9-._]+)$')
 
 
 def looks_like_short_id(value):
@@ -52,6 +53,29 @@ class GroupStatus(object):
     PENDING_MERGE = 5
 
 
+def get_group_with_redirect(id, queryset=None):
+    """
+    Retrieve a group by ID, checking the redirect table if the requested group
+    does not exist. Returns a two-tuple of ``(object, redirected)``.
+    """
+    if queryset is None:
+        queryset = Group.objects.all()
+        # When not passing a queryset, we want to read from cache
+        getter = Group.objects.get_from_cache
+    else:
+        getter = queryset.get
+
+    try:
+        return getter(id=id), False
+    except Group.DoesNotExist as error:
+        from sentry.models import GroupRedirect
+        qs = GroupRedirect.objects.filter(previous_group_id=id).values_list('group_id', flat=True)
+        try:
+            return queryset.get(id=qs), True
+        except Group.DoesNotExist:
+            raise error  # raise original `DoesNotExist`
+
+
 class GroupManager(BaseManager):
     use_for_related_fields = True
 
@@ -60,7 +84,7 @@ class GroupManager(BaseManager):
         if match is None:
             raise Group.DoesNotExist()
         callsign, id = match.groups()
-        callsign = callsign.upper()
+        callsign = callsign.lower()
         try:
             short_id = base32_decode(id)
             # We need to make sure the short id is not overflowing the
@@ -72,7 +96,7 @@ class GroupManager(BaseManager):
             raise Group.DoesNotExist()
         return Group.objects.get(
             project__organization=org,
-            project__callsign=callsign.upper(),
+            project__slug=callsign,
             short_id=short_id,
         )
 
@@ -110,10 +134,10 @@ class GroupManager(BaseManager):
                 'times_seen': 1,
             }, {
                 'group_id': group.id,
-                'project_id': project_id,
                 'key': key,
                 'value': value,
             }, {
+                'project': project_id,
                 'last_seen': date,
             })
 
@@ -197,10 +221,9 @@ class Group(Model):
 
     @property
     def qualified_short_id(self):
-        if self.project.callsign is not None and \
-           self.short_id is not None:
+        if self.short_id is not None:
             return '%s-%s' % (
-                self.project.callsign,
+                self.project.slug.upper(),
                 base32_encode(self.short_id),
             )
 
@@ -243,13 +266,19 @@ class Group(Model):
         return self.status
 
     def get_share_id(self):
-        return b16encode('{}.{}'.format(self.project_id, self.id)).lower()
+        return b16encode(
+            ('{}.{}'.format(self.project_id, self.id)).encode('utf-8')
+        ).lower().decode('utf-8')
 
     @classmethod
     def from_share_id(cls, share_id):
+        if not share_id:
+            raise cls.DoesNotExist
         try:
-            project_id, group_id = b16decode(share_id.upper()).split('.')
-        except ValueError:
+            project_id, group_id = b16decode(share_id.upper()).decode('utf-8').split('.')
+        except (ValueError, TypeError):
+            raise cls.DoesNotExist
+        if not (project_id.isdigit() and group_id.isdigit()):
             raise cls.DoesNotExist
         return cls.objects.get(project=project_id, id=group_id)
 

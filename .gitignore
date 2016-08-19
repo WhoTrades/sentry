@@ -1,5 +1,5 @@
+.cache/
 .coverage
-.tox
 .DS_Store
 *.egg-info
 *.pyc
@@ -17,6 +17,7 @@ sentry-package.json
 /build
 /dist
 /env
+/tmp
 /node_modules/
 /docs/_build
 example/db.sqlite

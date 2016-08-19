@@ -9,7 +9,7 @@ running on your own infrastructure.
 .. toctree::
    :maxdepth: 1
 
-   installation
+   installation/index
    upgrading
    config
    nginx
@@ -24,9 +24,11 @@ running on your own infrastructure.
    internal-metrics
    performance
    cli/index
-   health-checks
+   monitoring
    beacon
    plugins
+   warnings
+   dsym
    faq
 
 .. sentry:edition:: self, on-premise

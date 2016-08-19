@@ -32,6 +32,18 @@ class AuthFromRequestTest(BaseAPITest):
         result = self.helper.auth_from_request(request)
         assert result.public_key == 'value'
 
+    def test_valid_missing_space(self):
+        request = mock.Mock()
+        request.META = {'HTTP_X_SENTRY_AUTH': 'Sentry sentry_key=value,biz=baz'}
+        result = self.helper.auth_from_request(request)
+        assert result.public_key == 'value'
+
+    def test_valid_ignore_case(self):
+        request = mock.Mock()
+        request.META = {'HTTP_X_SENTRY_AUTH': 'SeNtRy sentry_key=value, biz=baz'}
+        result = self.helper.auth_from_request(request)
+        assert result.public_key == 'value'
+
     def test_invalid_header_defers_to_GET(self):
         request = mock.Mock()
         request.META = {'HTTP_X_SENTRY_AUTH': 'foobar'}
@@ -45,6 +57,25 @@ class AuthFromRequestTest(BaseAPITest):
         request.GET = {'sentry_version': '1', 'foo': 'bar'}
         result = self.helper.auth_from_request(request)
         assert result.version == '1'
+
+    def test_invalid_header_bad_token(self):
+        request = mock.Mock()
+        request.META = {'HTTP_X_SENTRY_AUTH': 'Sentryfoo'}
+        request.GET = {}
+        with self.assertRaises(APIUnauthorized):
+            self.helper.auth_from_request(request)
+
+    def test_invalid_header_missing_pair(self):
+        request = mock.Mock()
+        request.META = {'HTTP_X_SENTRY_AUTH': 'Sentry foo'}
+        with self.assertRaises(APIUnauthorized):
+            self.helper.auth_from_request(request)
+
+    def test_invalid_malformed_value(self):
+        request = mock.Mock()
+        request.META = {'HTTP_X_SENTRY_AUTH': 'Sentry sentry_key=value,,biz=baz'}
+        with self.assertRaises(APIUnauthorized):
+            self.helper.auth_from_request(request)
 
 
 class ProjectFromAuthTest(BaseAPITest):
@@ -86,7 +117,7 @@ class ProcessFingerprintTest(BaseAPITest):
 
 class ProcessDataTimestampTest(BaseAPITest):
     def test_iso_timestamp(self):
-        d = datetime(2012, 01, 01, 10, 30, 45)
+        d = datetime(2012, 1, 1, 10, 30, 45)
         data = self.helper._process_data_timestamp({
             'timestamp': '2012-01-01T10:30:45'
         }, current_datetime=d)
@@ -94,7 +125,7 @@ class ProcessDataTimestampTest(BaseAPITest):
         self.assertEquals(data['timestamp'], 1325413845.0)
 
     def test_iso_timestamp_with_ms(self):
-        d = datetime(2012, 01, 01, 10, 30, 45, 434000)
+        d = datetime(2012, 1, 1, 10, 30, 45, 434000)
         data = self.helper._process_data_timestamp({
             'timestamp': '2012-01-01T10:30:45.434'
         }, current_datetime=d)
@@ -102,7 +133,7 @@ class ProcessDataTimestampTest(BaseAPITest):
         self.assertEquals(data['timestamp'], 1325413845.0)
 
     def test_timestamp_iso_timestamp_with_Z(self):
-        d = datetime(2012, 01, 01, 10, 30, 45)
+        d = datetime(2012, 1, 1, 10, 30, 45)
         data = self.helper._process_data_timestamp({
             'timestamp': '2012-01-01T10:30:45Z'
         }, current_datetime=d)
@@ -125,7 +156,7 @@ class ProcessDataTimestampTest(BaseAPITest):
         })
 
     def test_long_microseconds_value(self):
-        d = datetime(2012, 01, 01, 10, 30, 45)
+        d = datetime(2012, 1, 1, 10, 30, 45)
         data = self.helper._process_data_timestamp({
             'timestamp': '2012-01-01T10:30:45.341324Z'
         }, current_datetime=d)
@@ -162,6 +193,15 @@ class ValidateDataTest(BaseAPITest):
         assert data['errors'][0]['type'] == 'value_too_long'
         assert data['errors'][0]['name'] == 'event_id'
         assert data['errors'][0]['value'] == 'a' * 33
+
+        data = self.helper.validate_data(self.project, {
+            'event_id': 'xyz',
+        })
+        assert data['event_id'] == '031667ea1758441f92c7995a428d2d14'
+        assert len(data['errors']) == 1
+        assert data['errors'][0]['type'] == 'invalid_data'
+        assert data['errors'][0]['name'] == 'event_id'
+        assert data['errors'][0]['value'] == 'xyz'
 
     def test_invalid_event_id_raises(self):
         self.assertRaises(APIError, self.helper.validate_data, self.project, {
@@ -271,6 +311,17 @@ class ValidateDataTest(BaseAPITest):
         assert data['errors'][0]['name'] == 'tags'
         assert data['errors'][0]['value'] == ('release', 'abc123')
 
+    def test_tag_value(self):
+        data = self.helper.validate_data(self.project, {
+            'message': 'foo',
+            'tags': [('foo', 'bar\n'), ('biz', 'baz')],
+        })
+        assert data['tags'] == [('biz', 'baz')]
+        assert len(data['errors']) == 1
+        assert data['errors'][0]['type'] == 'invalid_data'
+        assert data['errors'][0]['name'] == 'tags'
+        assert data['errors'][0]['value'] == ('foo', 'bar\n')
+
     def test_extra_as_string(self):
         data = self.helper.validate_data(self.project, {
             'message': 'foo',
@@ -366,6 +417,15 @@ class EnsureHasIpTest(BaseAPITest):
         self.helper.ensure_has_ip(out, '127.0.0.1')
         assert inp == out
 
+    def test_with_user_auto_ip(self):
+        out = {
+            'sentry.interfaces.User': {
+                'ip_address': '{{auto}}',
+            },
+        }
+        self.helper.ensure_has_ip(out, '127.0.0.1')
+        assert out['sentry.interfaces.User']['ip_address'] == '127.0.0.1'
+
     def test_without_ip_values(self):
         out = {
             'sentry.interfaces.User': {
@@ -382,6 +442,32 @@ class EnsureHasIpTest(BaseAPITest):
         self.helper.ensure_has_ip(out, '127.0.0.1')
         assert out['sentry.interfaces.User']['ip_address'] == '127.0.0.1'
 
+    def test_with_http_auto_ip(self):
+        out = {
+            'sentry.interfaces.Http': {
+                'env': {
+                    'REMOTE_ADDR': '{{auto}}',
+                },
+            },
+        }
+        self.helper.ensure_has_ip(out, '127.0.0.1')
+        assert out['sentry.interfaces.Http']['env']['REMOTE_ADDR'] == '127.0.0.1'
+
+    def test_with_all_auto_ip(self):
+        out = {
+            'sentry.interfaces.User': {
+                'ip_address': '{{auto}}',
+            },
+            'sentry.interfaces.Http': {
+                'env': {
+                    'REMOTE_ADDR': '{{auto}}',
+                },
+            },
+        }
+        self.helper.ensure_has_ip(out, '127.0.0.1')
+        assert out['sentry.interfaces.Http']['env']['REMOTE_ADDR'] == '127.0.0.1'
+        assert out['sentry.interfaces.User']['ip_address'] == '127.0.0.1'
+
 
 class CspApiHelperTest(BaseAPITest):
     helper_cls = CspApiHelper
@@ -394,11 +480,16 @@ class CspApiHelperTest(BaseAPITest):
             "effective-directive": "img-src",
             "original-policy": "default-src  https://45.55.25.245:8123/; child-src  https://45.55.25.245:8123/; connect-src  https://45.55.25.245:8123/; font-src  https://45.55.25.245:8123/; img-src  https://45.55.25.245:8123/; media-src  https://45.55.25.245:8123/; object-src  https://45.55.25.245:8123/; script-src  https://45.55.25.245:8123/; style-src  https://45.55.25.245:8123/; form-action  https://45.55.25.245:8123/; frame-ancestors 'none'; plugin-types 'none'; report-uri http://45.55.25.245:8123/csp-report?os=OS%20X&device=&browser_version=43.0&browser=chrome&os_version=Lion",
             "blocked-uri": "http://google.com",
-            "status-code": 200
+            "status-code": 200,
+            "_meta": {
+                "release": "abc123",
+            }
         }
         result = self.helper.validate_data(self.project, report)
         assert result['logger'] == 'csp'
         assert result['project'] == self.project.id
+        assert result['release'] == 'abc123'
+        assert result['errors'] == []
         assert 'message' in result
         assert 'culprit' in result
         assert 'tags' in result

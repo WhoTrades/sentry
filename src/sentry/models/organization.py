@@ -15,13 +15,13 @@ from django.utils.functional import cached_property
 from django.utils.translation import ugettext_lazy as _
 
 from sentry import roles
+from sentry.app import locks
 from sentry.constants import RESERVED_ORGANIZATION_SLUGS
 from sentry.db.models import (
-    BaseManager, BoundedPositiveIntegerField, Model,
-    sane_repr
+    BaseManager, BoundedPositiveIntegerField, Model, sane_repr
 )
 from sentry.db.models.utils import slugify_instance
-from sentry.utils.cache import Lock
+from sentry.utils.retries import TimedRetryPolicy
 
 
 # TODO(dcramer): pull in enum library
@@ -64,6 +64,8 @@ class Organization(Model):
     """
     An organization represents a group of individuals which maintain ownership of projects.
     """
+    __core__ = True
+
     name = models.CharField(max_length=64)
     slug = models.SlugField(unique=True)
     status = BoundedPositiveIntegerField(choices=(
@@ -83,6 +85,7 @@ class Organization(Model):
         ('allow_joinleave', 'Allow members to join and leave teams without requiring approval.'),
         ('enhanced_privacy', 'Enable enhanced privacy controls to limit personally identifiable information (PII) as well as source code in things like notifications.'),
         ('disable_shared_issues', 'Disable sharing of limited details on issues to anonymous users.'),
+        ('early_adopter', 'Enable early adopter status, gaining access to features prior to public release.'),
     ), default=1)
 
     objects = OrganizationManager(cache_fields=(
@@ -110,8 +113,8 @@ class Organization(Model):
 
     def save(self, *args, **kwargs):
         if not self.slug:
-            lock_key = 'slug:organization'
-            with Lock(lock_key):
+            lock = locks.get('slug:organization', duration=5)
+            with TimedRetryPolicy(10)(lock.acquire):
                 slugify_instance(self, self.name,
                                  reserved=RESERVED_ORGANIZATION_SLUGS)
             super(Organization, self).save(*args, **kwargs)

@@ -7,16 +7,20 @@ sentry.options.manager
 """
 from __future__ import absolute_import, print_function
 
+import six
 import sys
 import logging
-from itertools import ifilter
-from types import NoneType
+
 from django.conf import settings
+
 from sentry.utils.types import type_from_value, Any
 
 # Prevent outselves from clobbering the builtin
 _type = type
+
 logger = logging.getLogger('sentry')
+
+NoneType = type(None)
 
 
 class UnknownOption(KeyError):
@@ -36,6 +40,8 @@ FLAG_REQUIRED = 1 << 4
 # If the value is defined on disk, use that and don't attempt to fetch from db.
 # This also make the value immutible to changes from web UI.
 FLAG_PRIORITIZE_DISK = 1 << 5
+# If the value is allowed to be empty to be considered valid
+FLAG_ALLOW_EMPTY = 1 << 6
 
 # How long will a cache key exist in local memory before being evicted
 DEFAULT_KEY_TTL = 10
@@ -103,6 +109,19 @@ class OptionsManager(object):
                 return self.store.make_key(key, lambda: '', Any, DEFAULT_FLAGS, 0, 0)
             raise UnknownOption(key)
 
+    def isset(self, key):
+        """
+        Check if a key has been set to a value and not inheriting from its default.
+        """
+        opt = self.lookup_key(key)
+
+        if not (opt.flags & FLAG_NOSTORE):
+            result = self.store.get(opt, silent=True)
+            if result is not None:
+                return True
+
+        return key in settings.SENTRY_OPTIONS
+
     def get(self, key, silent=False):
         """
         Get the value of an option, falling back to the local configuration.
@@ -147,7 +166,10 @@ class OptionsManager(object):
             # default to the hardcoded local configuration for this key
             return settings.SENTRY_OPTIONS[key]
         except KeyError:
-            return opt.default()
+            try:
+                return settings.SENTRY_DEFAULT_OPTIONS[key]
+            except KeyError:
+                return opt.default()
 
     def delete(self, key):
         """
@@ -183,7 +205,7 @@ class OptionsManager(object):
         # Guess type based on the default value
         if type is None:
             # the default value would be equivilent to '' if no type / default
-            # is specified and we assume unicode for safety
+            # is specified and we assume six.text_type for safety
             if default_value is None:
                 default_value = u''
                 default = lambda: default_value
@@ -193,7 +215,7 @@ class OptionsManager(object):
         # really make sense as config options. There should be a sensible default
         # value instead that matches the type expected, rather than relying on None.
         if type is NoneType:
-            raise TypeError('Options must not be NoneType')
+            raise TypeError('Options must not be None')
 
         # Make sure the type is correct at registration time
         if default_value is not None and not type.test(default_value):
@@ -203,6 +225,14 @@ class OptionsManager(object):
         # value from the type
         if default_value is None:
             default = type
+            default_value = default()
+
+        # Boolean values need to be set to ALLOW_EMPTY becaues otherwise, "False"
+        # would be treated as a not valid value
+        if default_value is True or default_value is False:
+            flags |= FLAG_ALLOW_EMPTY
+
+        settings.SENTRY_DEFAULT_OPTIONS[key] = default_value
 
         self.registry[key] = self.store.make_key(key, default, type, flags, ttl, grace)
 
@@ -214,7 +244,7 @@ class OptionsManager(object):
             raise UnknownOption(key)
 
     def validate(self, options, warn=False):
-        for k, v in options.iteritems():
+        for k, v in six.iteritems(options):
             try:
                 self.validate_option(k, v)
             except UnknownOption as e:
@@ -232,7 +262,7 @@ class OptionsManager(object):
         """
         Return an interator for all keys in the registry.
         """
-        return self.registry.itervalues()
+        return six.itervalues(self.registry)
 
     def filter(self, flag=None):
         """
@@ -241,5 +271,5 @@ class OptionsManager(object):
         if flag is None:
             return self.all()
         if flag is DEFAULT_FLAGS:
-            return ifilter(lambda k: k.flags is DEFAULT_FLAGS, self.all())
-        return ifilter(lambda k: k.flags & flag, self.all())
+            return (k for k in self.all() if k.flags is DEFAULT_FLAGS)
+        return (k for k in self.all() if k.flags & flag)

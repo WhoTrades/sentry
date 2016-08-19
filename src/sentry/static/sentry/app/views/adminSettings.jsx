@@ -13,6 +13,8 @@ const optionsAvailable = [
   'system.url-prefix',
   'system.admin-email',
   'system.rate-limit',
+  'auth.ip-rate-limit',
+  'auth.user-rate-limit',
 ];
 
 const SettingsList = React.createClass({
@@ -26,11 +28,11 @@ const SettingsList = React.createClass({
     let options = this.props.options;
     let formData = {};
     let required = [];
-    let fields = [];
+    let fields = {};
     for (let key of optionsAvailable) {
       // TODO(dcramer): we should not be mutating options
       let option = options[key] || {field: {}};
-      if (typeof option.value === 'undefined' || option.value === '') {
+      if (_.isUndefined(option.value) || option.value === '') {
         let defn = getOption(key);
         formData[key] = defn.defaultValue ? defn.defaultValue() : '';
       } else {
@@ -39,7 +41,7 @@ const SettingsList = React.createClass({
       if (option.field.required) {
         required.push(key);
       }
-      fields.push(getOptionField(key, this.onFieldChange.bind(this, key), formData[key], option.field));
+      fields[key] = getOptionField(key, this.onFieldChange.bind(this, key), formData[key], option.field);
     }
 
     return {
@@ -68,7 +70,14 @@ const SettingsList = React.createClass({
 
     return (
       <Form onSubmit={this.onSubmit} submitDisabled={submitDisabled}>
-        {fields}
+        <h4>General</h4>
+        {fields['system.url-prefix']}
+        {fields['system.admin-email']}
+        {fields['system.rate-limit']}
+
+        <h4>Authentication</h4>
+        {fields['auth.ip-rate-limit']}
+        {fields['auth.user-rate-limit']}
       </Form>
     );
   }
@@ -134,7 +143,10 @@ const AdminSettings = React.createClass({
         this.setState({
           submitInProgress: false,
         });
-        AlertActions.addAlert(t('Your changes were saved, and will propagate to services shortly.'), 'success');
+        AlertActions.addAlert({
+            message: t('Your changes were saved, and will propagate to services shortly.'),
+            type: 'success'
+        });
       },
       error: () => {
         this.setState({

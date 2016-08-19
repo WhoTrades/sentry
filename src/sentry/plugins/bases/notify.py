@@ -8,6 +8,7 @@ sentry.plugins.bases.notify
 from __future__ import absolute_import, print_function
 
 import logging
+import six
 
 from django import forms
 
@@ -55,6 +56,10 @@ class NotificationPlugin(Plugin):
     project_conf_form = NotificationConfigurationForm
 
     def notify(self, notification):
+        self.logger.info('notification.dispatched', extra={
+            'event_id': notification.event.id,
+            'plugin': self.slug
+        })
         event = notification.event
         return self.notify_users(event.group, event)
 
@@ -83,7 +88,10 @@ class NotificationPlugin(Plugin):
                 deliver_digest.delay(digest_key)
 
         else:
-            notification = Notification(event=event, rules=rules)
+            notification = Notification(
+                event=event,
+                rules=rules,
+            )
             self.notify(notification)
 
     def notify_users(self, group, event, fail_silently=False):
@@ -93,6 +101,10 @@ class NotificationPlugin(Plugin):
         pass
 
     def get_sendable_users(self, project):
+        """
+        Return a collection of user IDs that are eligible to receive
+        notifications for the provided project.
+        """
         conf_key = self.get_conf_key()
 
         alert_settings = dict(
@@ -103,7 +115,7 @@ class NotificationPlugin(Plugin):
             )
         )
 
-        disabled = set(u for u, v in alert_settings.iteritems() if v == 0)
+        disabled = set(u for u, v in six.iteritems(alert_settings) if v == 0)
 
         member_set = set(project.member_set.exclude(
             user__in=disabled,
@@ -117,7 +129,7 @@ class NotificationPlugin(Plugin):
                 value='0',
                 user__in=members_to_check,
             ).values_list('user', flat=True))
-            member_set = filter(lambda x: x not in disabled, member_set)
+            member_set = [x for x in member_set if x not in disabled]
 
         return member_set
 
@@ -144,7 +156,7 @@ class NotificationPlugin(Plugin):
         # older plugins.
         if not (hasattr(self, 'notify_digest') and digests.enabled(project)) and self.__is_rate_limited(group, event):
             logger = logging.getLogger('sentry.plugins.{0}'.format(self.get_conf_key()))
-            logger.info('Notification for project %r dropped due to rate limiting', project)
+            logger.info('notification.rate_limited', extra={'project_id': project.id})
             return False
 
         return True

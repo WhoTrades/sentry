@@ -8,13 +8,31 @@ sentry.utils.samples
 from __future__ import absolute_import
 
 import os.path
+from datetime import datetime, timedelta
 
 from sentry.constants import DATA_ROOT
 from sentry.event_manager import EventManager
 from sentry.utils import json
 
 
-def load_data(platform, default=None):
+epoch = datetime.utcfromtimestamp(0)
+
+
+def milliseconds_ago(now, milliseconds):
+    ago = (now - timedelta(milliseconds=milliseconds))
+    return (ago - epoch).total_seconds()
+
+
+def load_data(platform, default=None, timestamp=None):
+    # NOTE: Before editing this data, make sure you understand the context
+    # in which its being used. It is NOT only used for local development and
+    # has production consequences.
+    #   * bin/load-mocks to generate fake data for local testing
+    #   * When a new project is created, a fake event is generated as a "starter"
+    #     event so it's not an empty project.
+    #   * When a user clicks Test Configuration from notification plugin settings page,
+    #     a fake event is generated to go through the pipeline.
+
     data = None
     for platform in (platform, default):
         if platform is None:
@@ -72,6 +90,24 @@ def load_data(platform, default=None):
         "method": "GET"
     }
 
+    start = datetime.utcnow()
+    if timestamp:
+        try:
+            start = datetime.utcfromtimestamp(timestamp)
+        except TypeError:
+            pass
+
+    # Make breadcrumb timestamps relative to right now so they make sense
+    breadcrumbs = data.get('sentry.interfaces.Breadcrumbs')
+    if breadcrumbs is not None:
+        duration = 1000
+        values = breadcrumbs['values']
+        for value in reversed(values):
+            value['timestamp'] = milliseconds_ago(start, duration)
+
+            # Every breadcrumb is 1s apart
+            duration += 1000
+
     return data
 
 
@@ -83,12 +119,15 @@ def create_sample_event(project, platform=None, default=None, raw=True,
     if platform:
         platform = platform.split('-', 1)[0].split('_', 1)[0]
 
-    data = load_data(platform, default)
+    timestamp = kwargs.get('timestamp')
+
+    data = load_data(platform, default, timestamp)
 
     if not data:
         return
 
     data.update(kwargs)
+    data.setdefault('environment', 'production')
 
     manager = EventManager(data)
     manager.normalize()

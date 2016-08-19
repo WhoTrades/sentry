@@ -1,7 +1,7 @@
 from __future__ import absolute_import
 
 from sentry.rules import rules
-from sentry.models import Rule
+from sentry.models import Rule, RuleStatus
 from sentry.web.frontend.base import ProjectView
 
 
@@ -18,17 +18,21 @@ class ProjectRulesView(ProjectView):
     required_scope = 'project:write'
 
     def get(self, request, organization, team, project):
+        queryset = Rule.objects.filter(
+            project=project,
+            status__in=[RuleStatus.ACTIVE, RuleStatus.INACTIVE],
+        )
         rule_list = []
-        for rule in Rule.objects.filter(project=project):
+        for rule in queryset:
             conditions = []
             for data in rule.data['conditions']:
                 conditions.append(_generate_rule_label(project, rule, data))
-            conditions = filter(bool, conditions)
+            conditions = list(filter(bool, conditions))
 
             actions = []
             for data in rule.data['actions']:
                 actions.append(_generate_rule_label(project, rule, data))
-            actions = filter(bool, actions)
+            actions = list(filter(bool, actions))
 
             rule_list.append({
                 'id': rule.id,

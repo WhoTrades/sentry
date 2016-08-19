@@ -1,6 +1,8 @@
 from __future__ import absolute_import, print_function
 
+import base64
 import logging
+import six
 import traceback
 
 from django.conf import settings
@@ -18,15 +20,16 @@ from raven.contrib.django.models import client as Raven
 from sentry import app
 from sentry.coreapi import (
     APIError, APIForbidden, APIRateLimited, ClientApiHelper, CspApiHelper,
+    LazyData
 )
 from sentry.event_manager import EventManager
 from sentry.models import Project, OrganizationOption
-from sentry.signals import event_received
+from sentry.signals import event_accepted, event_received
 from sentry.quotas.base import RateLimit
 from sentry.utils import json, metrics
 from sentry.utils.data_scrubber import SensitiveDataFilter
 from sentry.utils.http import (
-    is_valid_origin, get_origins, is_same_domain, is_valid_ip,
+    is_valid_origin, get_origins, is_same_domain,
 )
 from sentry.utils.safe import safe_execute
 from sentry.web.helpers import render_to_response
@@ -35,7 +38,7 @@ logger = logging.getLogger('sentry')
 
 # Transparent 1x1 gif
 # See http://probablyprogramming.com/2009/03/15/the-tiniest-gif-ever
-PIXEL = 'R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='.decode('base64')
+PIXEL = base64.b64decode('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=')
 
 PROTOCOL_VERSIONS = frozenset(('2.0', '3', '4', '5', '6', '7'))
 
@@ -73,7 +76,7 @@ class APIView(BaseView):
         auth = helper.auth_from_request(request)
 
         if auth.version not in PROTOCOL_VERSIONS:
-            raise APIError('Client using unsupported server protocol version (%r)' % str(auth.version or ''))
+            raise APIError('Client using unsupported server protocol version (%r)' % six.text_type(auth.version or ''))
 
         if not auth.client:
             raise APIError("Client did not send 'client' identifier")
@@ -110,9 +113,11 @@ class APIView(BaseView):
             response['X-Sentry-Error'] = context['error']
 
             if isinstance(e, APIRateLimited) and e.retry_after is not None:
-                response['Retry-After'] = str(e.retry_after)
+                response['Retry-After'] = six.text_type(e.retry_after)
 
         except Exception as e:
+            # TODO(dcramer): test failures are not outputting the log message
+            # here
             if settings.DEBUG:
                 content = traceback.format_exc()
             else:
@@ -129,7 +134,7 @@ class APIView(BaseView):
             response.status_code,
         ))
         metrics.incr('client-api.all-versions.responses.%sxx' % (
-            str(response.status_code)[0],
+            six.text_type(response.status_code)[0],
         ))
 
         if helper.context.version:
@@ -140,7 +145,7 @@ class APIView(BaseView):
                 helper.context.version, response.status_code
             ))
             metrics.incr('client-api.v%s.responses.%sxx' % (
-                helper.context.version, str(response.status_code)[0]
+                helper.context.version, six.text_type(response.status_code)[0]
             ))
 
         if response.status_code != 200 and origin:
@@ -282,10 +287,22 @@ class StoreView(APIView):
     def process(self, request, project, auth, helper, data, **kwargs):
         metrics.incr('events.total')
 
-        remote_addr = request.META['REMOTE_ADDR']
-        event_received.send_robust(ip=remote_addr, sender=type(self))
+        if not data:
+            raise APIError('No JSON data was found')
 
-        if not is_valid_ip(remote_addr, project):
+        data = LazyData(
+            data=data,
+            content_encoding=request.META.get('HTTP_CONTENT_ENCODING', ''),
+            helper=helper,
+        )
+
+        remote_addr = request.META['REMOTE_ADDR']
+        event_received.send_robust(
+            ip=remote_addr,
+            sender=type(self),
+        )
+
+        if helper.should_filter(project, data, ip_address=remote_addr):
             app.tsdb.incr_multi([
                 (app.tsdb.models.project_total_received, project.id),
                 (app.tsdb.models.project_total_blacklisted, project.id),
@@ -293,7 +310,7 @@ class StoreView(APIView):
                 (app.tsdb.models.organization_total_blacklisted, project.organization_id),
             ])
             metrics.incr('events.blacklisted')
-            raise APIForbidden('Blacklisted IP address: %s' % (remote_addr,))
+            raise APIForbidden('Event dropped due to filter')
 
         # TODO: improve this API (e.g. make RateLimit act on __ne__)
         rate_limit = safe_execute(app.quotas.is_rate_limited, project=project,
@@ -321,23 +338,17 @@ class StoreView(APIView):
                 (app.tsdb.models.organization_total_received, project.organization_id),
             ])
 
-        content_encoding = request.META.get('HTTP_CONTENT_ENCODING', '')
-
-        if isinstance(data, basestring):
-            if content_encoding == 'gzip':
-                data = helper.decompress_gzip(data)
-            elif content_encoding == 'deflate':
-                data = helper.decompress_deflate(data)
-            elif not data.startswith('{'):
-                data = helper.decode_and_decompress_data(data)
-            data = helper.safely_load_json_string(data)
-
         # mutates data
         data = helper.validate_data(project, data)
 
+        if 'sdk' not in data:
+            sdk = helper.parse_client_as_sdk(auth.client)
+            if sdk:
+                data['sdk'] = sdk
+
         # mutates data
         manager = EventManager(data, version=auth.version)
-        data = manager.normalize()
+        manager.normalize()
 
         org_options = OrganizationOption.objects.get_all_values(project.organization_id)
 
@@ -346,9 +357,11 @@ class StoreView(APIView):
         else:
             scrub_ip_address = project.get_option('sentry:scrub_ip_address', False)
 
-        # insert IP address if not available
-        if auth.is_public and not scrub_ip_address:
-            helper.ensure_has_ip(data, remote_addr)
+        # insert IP address if not available and wanted
+        if not scrub_ip_address:
+            helper.ensure_has_ip(
+                data, remote_addr, set_if_missing=auth.is_public or
+                data.get('platform') in ('javascript', 'cocoa', 'objc'))
 
         event_id = data['event_id']
 
@@ -394,6 +407,13 @@ class StoreView(APIView):
 
         helper.log.debug('New event received (%s)', event_id)
 
+        event_accepted.send_robust(
+            ip=remote_addr,
+            data=data,
+            project=project,
+            sender=type(self),
+        )
+
         return event_id
 
 
@@ -403,7 +423,6 @@ class CspReportView(StoreView):
 
     def _dispatch(self, request, helper, project_id=None, origin=None,
                   *args, **kwargs):
-        # NOTE: We need to override the auth flow for a CSP report!
         # A CSP report is sent as a POST request with no Origin or Referer
         # header. What we're left with is a 'document-uri' key which is
         # inside of the JSON body of the request. This 'document-uri' value
@@ -425,7 +444,7 @@ class CspReportView(StoreView):
         # This is yanking the auth from the querystring since it's not
         # in the POST body. This means we expect a `sentry_key` and
         # `sentry_version` to be set in querystring
-        auth = self._parse_header(request, helper, project)
+        auth = helper.auth_from_request(request)
 
         project_ = helper.project_from_auth(auth)
         if project_ != project:
@@ -460,6 +479,12 @@ class CspReportView(StoreView):
 
         if not is_valid_origin(origin, project):
             raise APIForbidden('Invalid document-uri')
+
+        # Attach on collected meta data. This data obviously isn't a part
+        # of the spec, but we need to append to the report sentry specific things.
+        report['_meta'] = {
+            'release': request.GET.get('sentry_release'),
+        }
 
         response_or_event_id = self.process(
             request,

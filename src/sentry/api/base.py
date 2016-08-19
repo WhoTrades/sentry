@@ -2,6 +2,8 @@ from __future__ import absolute_import
 
 __all__ = ['DocSection', 'Endpoint', 'StatsMixin']
 
+import logging
+import six
 import time
 
 from datetime import datetime, timedelta
@@ -21,7 +23,7 @@ from sentry.models import ApiKey, AuditLogEntry
 from sentry.utils.cursors import Cursor
 from sentry.utils.http import absolute_uri, is_valid_origin
 
-from .authentication import ApiKeyAuthentication
+from .authentication import ApiKeyAuthentication, TokenAuthentication
 from .paginator import Paginator
 from .permissions import NoPermission
 
@@ -33,9 +35,13 @@ ONE_DAY = ONE_HOUR * 24
 LINK_HEADER = '<{uri}&cursor={cursor}>; rel="{name}"; results="{has_results}"; cursor="{cursor}"'
 
 DEFAULT_AUTHENTICATION = (
+    TokenAuthentication,
     ApiKeyAuthentication,
-    SessionAuthentication
+    SessionAuthentication,
 )
+
+logger = logging.getLogger(__name__)
+audit_logger = logging.getLogger('sentry.audit.api')
 
 
 class DocSection(Enum):
@@ -56,7 +62,7 @@ class Endpoint(APIView):
     def build_cursor_link(self, request, name, cursor):
         querystring = u'&'.join(
             u'{0}={1}'.format(urlquote(k), urlquote(v))
-            for k, v in request.GET.iteritems()
+            for k, v in six.iteritems(request.GET)
             if k != 'cursor'
         )
         base_url = absolute_uri(request.path)
@@ -67,7 +73,7 @@ class Endpoint(APIView):
 
         return LINK_HEADER.format(
             uri=base_url,
-            cursor=str(cursor),
+            cursor=six.text_type(cursor),
             name=name,
             has_results='true' if bool(cursor) else 'false',
         )
@@ -97,12 +103,23 @@ class Endpoint(APIView):
         user = request.user if request.user.is_authenticated() else None
         api_key = request.auth if isinstance(request.auth, ApiKey) else None
 
-        AuditLogEntry.objects.create(
+        entry = AuditLogEntry.objects.create(
             actor=user,
             actor_key=api_key,
             ip_address=request.META['REMOTE_ADDR'],
             **kwargs
         )
+
+        extra = {
+            'entry_id': entry.id,
+            'actor_label': entry.actor_label
+        }
+        if entry.actor_id:
+            extra['actor_id'] = entry.actor_id
+        if entry.actor_key_id:
+            extra['actor_key_id'] = entry.actor_key_id
+
+        audit_logger.info(entry.get_event_display(), extra=extra)
 
     @csrf_exempt
     def dispatch(self, request, *args, **kwargs):
@@ -204,6 +221,7 @@ class StatsMixin(object):
         start = request.GET.get('since')
         if start:
             start = datetime.fromtimestamp(float(start)).replace(tzinfo=utc)
+            assert start <= end, 'start must be before or equal to end'
         else:
             start = end - timedelta(days=1, seconds=-1)
 

@@ -1,6 +1,10 @@
+from __future__ import absolute_import
+
 import os
+import uuid
 import time
 import errno
+import six
 import shutil
 
 from sentry import options
@@ -18,7 +22,7 @@ class DSymCache(object):
         return options.get('dsym.cache-path')
 
     def get_project_path(self, project):
-        return os.path.join(self.dsym_cache_path, str(project.id))
+        return os.path.join(self.dsym_cache_path, six.text_type(project.id))
 
     def get_global_path(self):
         return os.path.join(self.dsym_cache_path, 'global')
@@ -69,9 +73,21 @@ class DSymCache(object):
             pass
 
         with dsf.file.getfile() as sf:
-            with open(dsym + '_tmp', 'w') as df:
-                shutil.copyfileobj(sf, df)
-            os.rename(dsym + '_tmp', dsym)
+            suffix = '_%s' % uuid.uuid4()
+            done = False
+            try:
+                with open(dsym + suffix, 'w') as df:
+                    shutil.copyfileobj(sf, df)
+                os.rename(dsym + suffix, dsym)
+                done = True
+            finally:
+                # Use finally here because it does not lie about the
+                # error on exit
+                if not done:
+                    try:
+                        os.remove(dsym + suffix)
+                    except Exception:
+                        pass
 
         return base, dsym
 
@@ -79,7 +95,7 @@ class DSymCache(object):
         try:
             cache_folders = os.listdir(self.dsym_cache_path)
         except OSError:
-            pass
+            return
 
         cutoff = int(time.time()) - ONE_DAY_AND_A_HALF
 

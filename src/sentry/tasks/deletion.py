@@ -8,14 +8,14 @@ sentry.tasks.deletion
 
 from __future__ import absolute_import
 
-from celery.utils.log import get_task_logger
+import logging
 
 from sentry.exceptions import DeleteAborted
 from sentry.signals import pending_delete
 from sentry.tasks.base import instrumented_task, retry
 from sentry.utils.query import bulk_delete_objects
 
-logger = get_task_logger(__name__)
+logger = logging.getLogger('sentry.deletions')
 
 
 @instrumented_task(name='sentry.tasks.deletion.delete_organization', queue='cleanup',
@@ -39,7 +39,7 @@ def delete_organization(object_id, continuous=True, **kwargs):
         pending_delete.send(sender=Organization, instance=o)
 
     for team in Team.objects.filter(organization=o).order_by('id')[:1]:
-        logger.info('Removing Team id=%s where organization=%s', team.id, o.id)
+        logger.info('remove.team', extra={'team_id': team.id, 'organization_id': o.id})
         team.update(status=TeamStatus.DELETION_IN_PROGRESS)
         delete_team(team.id, continuous=False)
         if continuous:
@@ -76,7 +76,7 @@ def delete_team(object_id, continuous=True, **kwargs):
 
     # Delete 1 project at a time since this is expensive by itself
     for project in Project.objects.filter(team=t).order_by('id')[:1]:
-        logger.info('Removing Project id=%s where team=%s', project.id, t.id)
+        logger.info('remove.project', extra={'project_id': project.id, 'team_id': t.id})
         project.update(status=ProjectStatus.DELETION_IN_PROGRESS)
         delete_project(project.id, continuous=False)
         if continuous:
@@ -91,11 +91,12 @@ def delete_team(object_id, continuous=True, **kwargs):
 @retry(exclude=(DeleteAborted,))
 def delete_project(object_id, continuous=True, **kwargs):
     from sentry.models import (
-        Activity, EventMapping, Group, GroupAssignee, GroupBookmark,
-        GroupEmailThread, GroupHash, GroupMeta, GroupResolution,
-        GroupRuleStatus, GroupSeen, GroupTagKey, GroupTagValue, Project,
-        ProjectBookmark, ProjectKey, ProjectStatus, Release, ReleaseFile,
-        SavedSearchUserDefault, SavedSearch, TagKey, TagValue, UserReport
+        Activity, EventMapping, EventUser, Group, GroupAssignee, GroupBookmark,
+        GroupEmailThread, GroupHash, GroupMeta, GroupRelease, GroupResolution,
+        GroupRuleStatus, GroupSeen, GroupSubscription, GroupSnooze, GroupTagKey,
+        GroupTagValue, Project, ProjectBookmark, ProjectKey, ProjectStatus,
+        Release, ReleaseFile, SavedSearchUserDefault, SavedSearch, TagKey,
+        TagValue, UserReport, ReleaseEnvironment, Environment
     )
 
     try:
@@ -114,10 +115,11 @@ def delete_project(object_id, continuous=True, **kwargs):
     ProjectKey.objects.filter(project_id=object_id).delete()
 
     model_list = (
-        Activity, EventMapping, GroupAssignee, GroupBookmark, GroupEmailThread,
-        GroupHash, GroupSeen, GroupRuleStatus, GroupTagKey, GroupTagValue,
-        ProjectBookmark, ProjectKey, TagKey, TagValue, SavedSearchUserDefault,
-        SavedSearch, UserReport
+        Activity, EventMapping, EventUser, GroupAssignee, GroupBookmark,
+        GroupEmailThread, GroupHash, GroupRelease, GroupRuleStatus, GroupSeen,
+        GroupSubscription, GroupTagKey, GroupTagValue, ProjectBookmark,
+        ProjectKey, TagKey, TagValue, SavedSearchUserDefault, SavedSearch,
+        UserReport, ReleaseEnvironment, Environment
     )
     for model in model_list:
         has_more = bulk_delete_objects(model, project_id=p.id, logger=logger)
@@ -128,7 +130,7 @@ def delete_project(object_id, continuous=True, **kwargs):
 
     # TODO(dcramer): no project relation so we cant easily bulk
     # delete today
-    has_more = delete_objects([GroupMeta, GroupResolution],
+    has_more = delete_objects([GroupMeta, GroupResolution, GroupSnooze],
                               relation={'group__project': p},
                               logger=logger)
     if has_more:
@@ -161,8 +163,9 @@ def delete_project(object_id, continuous=True, **kwargs):
 def delete_group(object_id, continuous=True, **kwargs):
     from sentry.models import (
         EventMapping, Group, GroupAssignee, GroupBookmark, GroupHash, GroupMeta,
-        GroupResolution, GroupRuleStatus, GroupStatus, GroupTagKey,
-        GroupTagValue, GroupEmailThread, UserReport
+        GroupRelease, GroupResolution, GroupRuleStatus, GroupSnooze,
+        GroupSubscription, GroupStatus, GroupTagKey, GroupTagValue,
+        GroupEmailThread, GroupRedirect, UserReport
     )
 
     try:
@@ -175,9 +178,10 @@ def delete_group(object_id, continuous=True, **kwargs):
 
     bulk_model_list = (
         # prioritize GroupHash
-        GroupHash, GroupAssignee, GroupBookmark, GroupMeta, GroupResolution,
-        GroupRuleStatus, GroupTagValue, GroupTagKey, EventMapping,
-        GroupEmailThread, UserReport
+        GroupHash, GroupAssignee, GroupBookmark, GroupMeta, GroupRelease,
+        GroupResolution, GroupRuleStatus, GroupSnooze, GroupTagValue,
+        GroupTagKey, EventMapping, GroupEmailThread, UserReport, GroupRedirect,
+        GroupSubscription,
     )
     for model in bulk_model_list:
         has_more = bulk_delete_objects(model, group_id=object_id, logger=logger)
@@ -199,7 +203,7 @@ def delete_group(object_id, continuous=True, **kwargs):
 @retry(exclude=(DeleteAborted,))
 def delete_tag_key(object_id, continuous=True, **kwargs):
     from sentry.models import (
-        GroupTagKey, GroupTagValue, TagKey, TagKeyStatus, TagValue
+        EventTag, GroupTagKey, GroupTagValue, TagKey, TagKeyStatus, TagValue
     )
 
     try:
@@ -220,6 +224,14 @@ def delete_tag_key(object_id, continuous=True, **kwargs):
             if continuous:
                 delete_tag_key.delay(object_id=object_id, countdown=15)
             return
+
+    has_more = bulk_delete_objects(EventTag, project_id=tagkey.project_id,
+                                   key_id=tagkey.id, logger=logger)
+    if has_more:
+        if continuous:
+            delete_tag_key.delay(object_id=object_id, countdown=15)
+        return
+
     tagkey.delete()
 
 
@@ -229,14 +241,15 @@ def delete_events(relation, limit=100, logger=None):
 
     has_more = False
     if logger is not None:
-        logger.info('Removing %r objects where %r', Event, relation)
+        logger.info('remove.event', extra=relation)
 
     result_set = list(Event.objects.filter(**relation)[:limit])
     has_more = bool(result_set)
     if has_more:
         # delete objects from nodestore first
-        node_ids = set(r.data.id for r in result_set)
-        nodestore.delete_multi(node_ids)
+        node_ids = set(r.data.id for r in result_set if r.data.id)
+        if node_ids:
+            nodestore.delete_multi(node_ids)
 
         event_ids = [r.id for r in result_set]
 
@@ -251,7 +264,7 @@ def delete_objects(models, relation, limit=100, logger=None):
     has_more = False
     for model in models:
         if logger is not None:
-            logger.info('Removing %r objects where %r', model, relation)
+            logger.info('remove.%s' % model.__name__.lower(), extra=relation)
         for obj in model.objects.filter(**relation)[:limit]:
             obj.delete()
             has_more = True

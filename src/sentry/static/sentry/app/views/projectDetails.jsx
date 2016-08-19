@@ -1,7 +1,9 @@
 import React from 'react';
 import Reflux from 'reflux';
+
 import ApiMixin from '../mixins/apiMixin';
 import DocumentTitle from 'react-document-title';
+import EnvironmentStore from '../stores/environmentStore';
 import MemberListStore from '../stores/memberListStore';
 import LoadingError from '../components/loadingError';
 import LoadingIndicator from '../components/loadingIndicator';
@@ -10,6 +12,7 @@ import ProjectHeader from '../components/projectHeader';
 import OrganizationState from '../mixins/organizationState';
 import PropTypes from '../proptypes';
 import TeamStore from '../stores/teamStore';
+import ProjectStore from '../stores/projectStore';
 import {t} from '../locale';
 
 const ERROR_TYPES = {
@@ -27,6 +30,7 @@ const ProjectDetails = React.createClass({
     ApiMixin,
     Reflux.connect(MemberListStore, 'memberList'),
     Reflux.listenTo(TeamStore, 'onTeamChange'),
+    Reflux.listenTo(ProjectStore, 'onProjectChange'),
     OrganizationState
   ],
 
@@ -54,22 +58,41 @@ const ProjectDetails = React.createClass({
   },
 
   componentWillReceiveProps(nextProps) {
-    if (nextProps.params.projectId !== this.props.params.projectId ||
-      nextProps.params.orgId != this.props.params.orgId) {
+    if (nextProps.params.projectId !== this.props.params.projectId) {
       this.remountComponent();
     }
   },
 
-  remountComponent() {
-    this.setState(this.getInitialState(), this.fetchData);
+  componentDidUpdate(prevProps, prevState) {
+    if (prevProps.params.projectId !== this.props.params.projectId) {
+      this.fetchData();
+    }
   },
 
-  onTeamChange() {
-    this.fetchData();
+  remountComponent() {
+    this.setState(this.getInitialState());
+  },
+
+  onTeamChange(itemIds) {
+    if (!this.state.team) return;
+    if (!itemIds.has(this.state.team.id)) return;
+
+    this.setState({
+      team: {...TeamStore.getById(this.state.team.id)}
+    });
+  },
+
+  onProjectChange(projectIds) {
+    if (!this.state.project) return;
+    if (!projectIds.has(this.state.project.id)) return;
+
+    this.setState({
+      project: {...ProjectStore.getById(this.state.project.id)}
+    });
   },
 
   identifyProject() {
-    let params = this.props.params;
+    let {params} = this.props;
     let projectSlug = params.projectId;
     let activeProject = null;
     let activeTeam = null;
@@ -93,33 +116,39 @@ const ProjectDetails = React.createClass({
     let [activeTeam, activeProject] = this.identifyProject();
     let hasAccess = activeTeam && activeTeam.hasAccess;
 
+    this.setState({
+      loading: true,
+      project: activeProject,
+      team: activeTeam
+    });
+
     if (activeProject && hasAccess) {
       // TODO(dcramer): move member list to organization level
       this.api.request(this.getMemberListEndpoint(), {
         success: (data) => {
-          MemberListStore.loadInitialData(data);
+          MemberListStore.loadInitialData(data.filter((m) => m.user).map((m) => m.user));
+        }
+      });
+
+      this.api.request(this.getEnvironmentListEndpoint(), {
+        success: (data) => {
+          EnvironmentStore.loadInitialData(data);
         }
       });
 
       this.setState({
-        project: activeProject,
-        team: activeTeam,
         loading: false,
         error: false,
         errorType: null
       });
     } else if (activeTeam && activeTeam.isMember) {
       this.setState({
-        project: activeProject,
-        team: activeTeam,
         loading: false,
         error: true,
         errorType: ERROR_TYPES.MISSING_MEMBERSHIP
       });
     } else {
       this.setState({
-        project: activeProject,
-        team: activeTeam,
         loading: false,
         error: true,
         errorType: ERROR_TYPES.PROJECT_NOT_FOUND
@@ -127,9 +156,14 @@ const ProjectDetails = React.createClass({
     }
   },
 
+  getEnvironmentListEndpoint() {
+    let {orgId, projectId} = this.props.params;
+    return `/projects/${orgId}/${projectId}/environments/`;
+  },
+
   getMemberListEndpoint() {
-    let params = this.props.params;
-    return '/projects/' + params.orgId + '/' + params.projectId + '/members/';
+    let {orgId, projectId} = this.props.params;
+    return `/projects/${orgId}/${projectId}/members/`;
   },
 
   setProjectNavSection(section) {

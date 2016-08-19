@@ -1,7 +1,161 @@
+Version 8.8 (Unreleased)
+------------------------
+
+Version 8.7
+-----------
+
+- Removed "Replay Request" feature.
+- Upgraded underlying redis library to resolve some networking issues.
+- Added support for minified React exceptions.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Remove index ``GroupTagValue(project_id)``.
+- Added ``Rule.status`` column.
+- Added ``GroupRelease`` model.
+- Added ``Environment`` model.
+- Added ``ReleaseEnvironment`` model.
+
+Version 8.6
+-----------
+
+- The ``message`` attribute on Event/Group is now purely used for search storage.
+- The ``sentry.interfaces.Message`` interface now contains a ``formatted`` attribute.
+- ``SENTRY_MANAGED_USER_FIELDS`` now defaults to an empty list.
+- Issues now render based on the type of data present, which are represented by
+  the type and metadata attributes in API responses.
+- Stacktrace rendering has been greatly simplified and unified across languages.
+- Client's may now pass the 'contexts' attribute, which will eventually supercede 'extra'.
+- Various named contexts are now automatically generated and summarized for Cocoa and JavaScript
+  issues.
+- Added JSON formatting for logs with ``system.logging-format``.
+- Added a ``loglevel`` command line flag to most commands.
+- Added two factor authentication support.
+- Added support for setting IP address of an event automatically on event submission for all platforms.
+- Added unsubscribe links to mails.
+- Added email verification.
+- Added ability to link/unlink Issues, support is dependent on plugins.
+- Can now toggle between minified/original code in stacktraces where sourcemaps were applied.
+- Can now upload release artifacts with tilde prefix (~) to omit protocol + host in URL lookups.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``User.is_password_expired`` column.
+- Added ``User.last_password_change`` column.
+- Added ``UserEmail`` model.
+- Added unique index on ``GroupTagValue(group_id, key, value)``
+- Remove unique index on ``GroupTagValue(project_id, group_id, key, value)``
+- Added index on ``GroupTagValue(project_id, key, value)``
+- Added ``GroupSubscription`` model.
+
+Version 8.5.1
+-------------
+
+- Fixed issue with new Unsubscribe links in emails not working.
+- Fixed bug with raven-js compatibility with IE8.
+- Fixed bug handling IPv6 addresses.
+
+Version 8.5
+-----------
+
+- Added option to upload a profile image as an alternative to Gravatar.
+- Deprecated ``sentry celery`` subcommand in favor of ``sentry run {worker|cron}``.
+- Breadcrumb interface now rendered in event UI.
+- Project notification settings page now indicates if current user is subscribed to active project.
+- User is now automatically redirected to login page if their session expires inside React client application.
+- Added new auth tokens to deprecate the usage of the older API keys.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``ProjectPlatform`` model.
+- Added index on``EventTag`` index.
+- Added unique index on ``UserReport`` model.
+- Added ``UserAvatar`` model.
+- Added ``EventTag.group_id`` column.
+- Added ``ApiToken`` model.
+- Added ``Authenticator`` model.
+
+
+Version 8.4.1
+-------------
+
+- Fixed issue in running 8.4 migrations on MySQL only.
+- Fixed issue that caused an infinite loop in ``patch_context.py`` under a race condition.
+- Silently ignore breadcrumb data coming from clients instead of showing an error in the UI.
+
+Version 8.4
+-----------
+
+- Fixed bug that caused some email subjects to be generated without respecting the project subject prefix option.
+- Organization's can now opt-in to early adopter features (via organization settings).
+- User Feedback is now enabled by default.
+- Deprecated ``sentry start`` in favor of new ``sentry run``.
+- Access is no longer restricted by default to the domain matching ``system.url-prefix``. You must opt into this by setting ``ALLOWED_HOSTS`` explicitly.
+- Replaced Gravatar mystery man with letter avatars
+- Added 'Events Per Hour' graph to organization dashboard
+- Moved organization activity stream to main column from sidebar
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``DSymSymbol`` model.
+- Added ``DSymSDK`` model.
+- Added ``DSymObject`` model.
+- Added ``DSymBundle`` model.
+
+Version 8.3.3
+-------------
+
+- [SECURITY] Fixed a bug which allows API keys more permission than granted within the organization.
+
+Version 8.3.2
+-------------
+
+- Fixed bug affecting only MySQL users, see `GH-3030 <https://github.com/getsentry/sentry/issues/3030>`_.
+
+Version 8.3.1
+-------------
+
+- Fixed bug that, ironically, prevented saving a saved search.
+- Fixed bug when merging groups and the counts are merged incorrectly.
+- Fixed bug that caused the Installation Wizard to never go away if using a non-smtp email.backend setting.
+- Fixed an ImproperlyConfigured issue from a cascading error.
+
 Version 8.3.0
 -------------
 
-- added initial support for per-project callsigns and short IDs.
+- Added initial support for per-project callsigns and short IDs.  This feature is not exposed to users yet.
+- Improved static file delivery performance.
+- Added CLI tool to monitor queue sizes. ``sentry queues --help``
+- Moved email configuration into ``config.yml``.
+- Added mailing list support (via ``List-Id`` header) for outbound email.
+- URLs for issues that have been merged now redirect to the issue that absorbed the requested issue.
+- Projects can now be bookmarked in the UI.
+- Dashboard is now the default view for an organization.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``ProjectDSymFile`` model.
+- Added ``Counter`` model.
+- Added ``GlobalDSymFile`` model.
+- Added ``Group.short_id`` column.
+- Added ``sentry_increment_project_counter`` function for PostgreSQL.
+- Added ``Project.forced_color`` column.
+- Added ``GroupRedirect`` model.
+
+Version 8.2.5
+-------------
+
+- [SECURITY] Fixed a bug which allows API keys more permission than granted within the organization.
+
+Version 8.2.4
+-------------
+
+- [SECURITY] If being run in multi-organization mode, it was possible for a user to craft a URL which would allow them to view membership details of other users.
 
 Version 8.2.3
 -------------
@@ -36,6 +190,11 @@ Schema Changes
 - Added ``EventTag`` model.
 - Added ``OrganizationOnboardingTask`` model.
 
+Version 8.1.5
+-------------
+
+- [SECURITY] If being run in multi-organization mode, it was possible for a user to craft a URL which would allow them to view membership details of other users.
+
 Version 8.1.4
 -------------
 
@@ -61,7 +220,7 @@ Version 8.1.1
 Version 8.1.0
 -------------
 
-- Default web server is now uWSGI (https://uwsgi-docs.readthedocs.org/en/latest/) to replace gunicorn.
+- Default web server is now uWSGI (https://uwsgi-docs.readthedocs.io/en/latest/) to replace gunicorn.
 - New "Saved Searches". See: http://blog.getsentry.com/2016/01/19/introducing-saved-searches.html
 
 Schema Changes

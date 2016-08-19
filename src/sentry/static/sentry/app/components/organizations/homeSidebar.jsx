@@ -1,7 +1,6 @@
 import React from 'react';
 import ListLink from '../listLink';
 import OrganizationState from '../../mixins/organizationState';
-import ConfigStore from '../../stores/configStore';
 import HookStore from '../../stores/hookStore';
 import {t} from '../../locale';
 
@@ -29,18 +28,20 @@ const HomeSidebar = React.createClass({
     let access = this.getAccess();
     let features = this.getFeatures();
     let org = this.getOrganization();
-    let urlPrefix = ConfigStore.get('urlPrefix') + '/organizations/' + org.slug;
 
     let orgId = org.slug;
     return (
       <div>
         <h6 className="nav-header">{t('Organization')}</h6>
         <ul className="nav nav-stacked">
-          <ListLink to={`/organizations/${orgId}/dashboard/`}>{t('Dashboard')}</ListLink>
           <ListLink to={`/${orgId}/`} isActive={() => {
-            // return true if path matches /slug-name/ OR /organizations/slug-name/all-teams/
-            return /^\/([^\/]+|organizations\/[^\/]+\/all-teams)\/$/.test(this.context.location.pathname);
-          }}>{t('Projects')}</ListLink>
+            // return true if path matches /organizations/slug-name/teams/ OR /organizations/slug-name/all-teams/
+            return /^\/[^\/]+\/$/.test(this.context.location.pathname);
+          }}>{t('Dashboard')}</ListLink>
+          <ListLink to={`/organizations/${orgId}/teams/`} isActive={() => {
+            // return true if path matches /organizations/slug-name/teams/ OR /organizations/slug-name/all-teams/
+            return /^\/organizations\/[^\/]+\/(teams|all-teams)\/$/.test(this.context.location.pathname);
+          }}>{t('Projects & Teams')}</ListLink>
           {access.has('org:read') &&
             <ListLink to={`/organizations/${orgId}/stats/`}>{t('Stats')}</ListLink>
           }
@@ -59,7 +60,7 @@ const HomeSidebar = React.createClass({
             <ul className="nav nav-stacked">
               {access.has('org:read') &&
                 <li>
-                  <a href={urlPrefix + '/members/'}>
+                  <a href={`/organizations/${orgId}/members/`}>
                     {t('Members')}&nbsp;
                     {access.has('org:write') && org.pendingAccessRequests > 0 &&
                       <span className="badge" style={{marginLeft: 5}}>{org.pendingAccessRequests}</span>
@@ -67,20 +68,20 @@ const HomeSidebar = React.createClass({
                   </a>
                 </li>
               }
-              {features.has('sso') && access.has('org:write') &&
-                <li><a href={urlPrefix + '/auth/'}>{t('Auth')}</a></li>
+              {features.has('sso') && access.has('org:delete') &&
+                <li><a href={`/organizations/${orgId}/auth/`}>{t('Auth')}</a></li>
               }
-              {access.has('org:delete') &&
-                <li><a href={urlPrefix + '/api-keys/'}>{t('API Keys')}</a></li>
+              {access.has('org:delete') && features.has('api-keys') &&
+                <li><a href={`/organizations/${orgId}/api-keys/`}>{t('API Keys')}</a></li>
               }
               {access.has('org:write') &&
-                <li><a href={urlPrefix + '/audit-log/'}>{t('Audit Log')}</a></li>
+                <ListLink to={`/organizations/${orgId}/audit-log/`}>{t('Audit Log')}</ListLink>
               }
               {access.has('org:write') &&
                 <ListLink to={`/organizations/${orgId}/rate-limits/`}>{t('Rate Limits')}</ListLink>
               }
               {access.has('org:write') &&
-                <li><a href={urlPrefix + '/settings/'}>{t('Settings')}</a></li>
+                <li><a href={`/organizations/${orgId}/settings/`}>{t('Settings')}</a></li>
               }
             </ul>
           </div>

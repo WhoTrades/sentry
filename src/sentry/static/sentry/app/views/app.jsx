@@ -1,4 +1,7 @@
 import React from 'react';
+import $ from 'jquery';
+import Cookies from 'js-cookie';
+
 import ApiMixin from '../mixins/apiMixin';
 import Alerts from '../components/alerts';
 import AlertActions from '../actions/alertActions.jsx';
@@ -8,6 +11,15 @@ import InstallWizard from './installWizard';
 import LoadingIndicator from '../components/loadingIndicator';
 import OrganizationStore from '../stores/organizationStore';
 import {t} from '../locale';
+
+function getAlertTypeForProblem(problem) {
+  switch (problem.severity) {
+    case 'critical':
+      return 'error';
+    default:
+      return 'warning';
+  }
+}
 
 const App = React.createClass({
   mixins: [
@@ -45,7 +57,12 @@ const App = React.createClass({
       success: (data) => {
         if (data && data.problems) {
           data.problems.forEach(problem => {
-            AlertActions.addAlert(problem.message, 'error', 0, problem.url);
+            AlertActions.addAlert({
+              id: problem.id,
+              message: problem.message,
+              type: getAlertTypeForProblem(problem),
+              url: problem.url
+            });
           });
         }
       },
@@ -53,7 +70,22 @@ const App = React.createClass({
     });
 
     ConfigStore.get('messages').forEach((msg) => {
-      AlertActions.addAlert(msg.message, msg.level);
+      AlertActions.addAlert({
+        message: msg.message,
+        type: msg.level
+      });
+    });
+
+    $(document).ajaxError(function (evt, jqXHR) {
+      // TODO: Need better way of identifying anonymous pages
+      //       that don't trigger redirect
+      let pageAllowsAnon = /^\/share\//.test(window.location.pathname);
+      if (jqXHR && jqXHR.status === 401 && !pageAllowsAnon) {
+        Cookies.set('session_expired', 1);
+        // User has become unauthenticated; reload URL, and let Django
+        // redirect to login page
+        window.location.reload();
+      }
     });
   },
 

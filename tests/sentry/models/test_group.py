@@ -1,12 +1,17 @@
 from __future__ import absolute_import
 
-import pytest
+import six
 
-from datetime import timedelta, datetime
+from datetime import datetime, timedelta
+
+import pytest
 from django.db.models import ProtectedError
 from django.utils import timezone
 
-from sentry.models import Group, GroupSnooze, GroupStatus, Release
+from sentry.models import (
+    Group, GroupRedirect, GroupSnooze, GroupStatus, Release,
+    get_group_with_redirect
+)
 from sentry.testutils import TestCase
 
 
@@ -38,9 +43,9 @@ class GroupTest(TestCase):
 
     def test_get_oldest_latest_events(self):
         group = self.create_group()
-        for i in xrange(0, 3):
+        for i in range(0, 3):
             self.create_event(
-                event_id=str(i),
+                event_id=six.text_type(i),
                 group=group,
                 datetime=datetime(2013, 8, 13, 3, 8, i),
             )
@@ -50,9 +55,9 @@ class GroupTest(TestCase):
 
     def test_get_oldest_latest_identical_timestamps(self):
         group = self.create_group()
-        for i in xrange(0, 3):
+        for i in range(0, 3):
             self.create_event(
-                event_id=str(i),
+                event_id=six.text_type(i),
                 group=group,
                 datetime=datetime(2013, 8, 13, 3, 8, 50),
             )
@@ -67,9 +72,9 @@ class GroupTest(TestCase):
             group=group,
             datetime=datetime(2013, 8, 13, 3, 8, 0),  # earliest
         )
-        for i in xrange(1, 3):
+        for i in range(1, 3):
             self.create_event(
-                event_id=str(i),
+                event_id=six.text_type(i),
                 group=group,
                 datetime=datetime(2013, 8, 13, 3, 8, 30),  # all in the middle
             )
@@ -124,3 +129,27 @@ class GroupTest(TestCase):
         assert self.create_group(message='\nfoo\n   ').message == 'foo'
         assert self.create_group(message='foo').message == 'foo'
         assert self.create_group(message='').message == ''
+
+    def test_get_group_with_redirect(self):
+        group = self.create_group()
+        assert get_group_with_redirect(group.id) == (group, False)
+
+        duplicate_id = self.create_group().id
+        Group.objects.filter(id=duplicate_id).delete()
+        GroupRedirect.objects.create(
+            group_id=group.id,
+            previous_group_id=duplicate_id,
+        )
+
+        assert get_group_with_redirect(duplicate_id) == (group, True)
+
+        # We shouldn't end up in a case where the redirect points to a bad
+        # reference, but testing this path for completeness.
+        group.delete()
+
+        with pytest.raises(Group.DoesNotExist):
+            get_group_with_redirect(duplicate_id)
+
+    def test_invalid_shared_id(self):
+        with pytest.raises(Group.DoesNotExist):
+            Group.from_share_id('adc7a5b902184ce3818046302e94f8ec')

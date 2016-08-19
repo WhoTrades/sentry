@@ -34,11 +34,11 @@ const arrayIsEqual = function(arr, other, deep) {
 const valueIsEqual = function(value, other, deep) {
   if (value === other) {
     return true;
-  } else if (value instanceof Array || other instanceof Array) {
+  } else if (_.isArray(value) || _.isArray(other)) {
     if (arrayIsEqual(value, other, deep)) {
       return true;
     }
-  } else if (value instanceof Object || other instanceof Object) {
+  } else if (_.isObject(value) || _.isObject(other)) {
     if (objectMatchesSubset(value, other, deep)) {
       return true;
     }
@@ -105,6 +105,10 @@ const compareArrays = function(arr1, arr2, compFunc) {
   return true;
 };
 
+const intcomma = function(x) {
+    return x.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+};
+
 export default {
   getQueryParams() {
     let hashes, hash;
@@ -163,7 +167,7 @@ export default {
   },
 
   defined(item) {
-    return typeof item !== 'undefined' && item !== null;
+    return !_.isUndefined(item) && item !== null;
   },
 
   nl2br(str) {
@@ -196,6 +200,7 @@ export default {
   arrayIsEqual: arrayIsEqual,
   objectMatchesSubset: objectMatchesSubset,
   compareArrays: compareArrays,
+  intcomma: intcomma,
   modelsEqual: modelsEqual,
   valueIsEqual: valueIsEqual,
   parseLinkHeader: require('./utils/parseLinkHeader'),

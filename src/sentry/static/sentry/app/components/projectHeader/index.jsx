@@ -1,6 +1,5 @@
 import React from 'react';
 import {Link} from 'react-router';
-import ConfigStore from '../../stores/configStore';
 
 import ProjectSelector from './projectSelector';
 import {t} from '../../locale';
@@ -14,7 +13,6 @@ const ProjectHeader = React.createClass({
 
   render() {
     let navSection = this.props.activeSection;
-    let urlPrefix = ConfigStore.get('urlPrefix');
     let project = this.props.project;
     let org = this.props.organization;
     let features = new Set(project.features);
@@ -43,13 +41,11 @@ const ProjectHeader = React.createClass({
                     </Link>
                   </li>
                 }
-                {features.has('user-reports') &&
-                  <li className={navSection == 'user-reports' ? 'active' : ''}>
-                    <Link to={`/${org.slug}/${project.slug}/user-reports/`}>
-                      {t('User Reports')}
-                    </Link>
-                  </li>
-                }
+                <li className={navSection == 'user-feedback' ? 'active' : ''}>
+                  <Link to={`/${org.slug}/${project.slug}/user-feedback/`}>
+                    {t('User Feedback')}
+                  </Link>
+                </li>
                 <li className={navSection == 'releases' ? 'active' : ''}>
                   <Link to={`/${org.slug}/${project.slug}/releases/`}>
                     {t('Releases')}
@@ -57,7 +53,7 @@ const ProjectHeader = React.createClass({
                 </li>
                 {access.has('project:write') &&
                   <li className={navSection == 'settings' ? 'active' : ''}>
-                    <a href={urlPrefix + `/${org.slug}/${project.slug}/settings/`}>
+                    <a href={`/${org.slug}/${project.slug}/settings/`}>
                       {t('Settings')}
                     </a>
                   </li>

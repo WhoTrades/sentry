@@ -1,11 +1,13 @@
 from __future__ import absolute_import, print_function
 
+import six
+
 from datetime import timedelta
 from django.utils import timezone
 
 from sentry.models import (
     Activity, Group, GroupAssignee, GroupBookmark, GroupSeen, GroupSnooze,
-    GroupStatus, GroupTagValue, Release
+    GroupSubscription, GroupStatus, GroupTagValue, Release
 )
 from sentry.testutils import APITestCase
 
@@ -20,7 +22,7 @@ class GroupDetailsTest(APITestCase):
         response = self.client.get(url, format='json')
 
         assert response.status_code == 200, response.content
-        assert response.data['id'] == str(group.id)
+        assert response.data['id'] == six.text_type(group.id)
         assert response.data['firstRelease'] is None
 
     def test_with_first_release(self):
@@ -43,7 +45,7 @@ class GroupDetailsTest(APITestCase):
         response = self.client.get(url, format='json')
 
         assert response.status_code == 200, response.content
-        assert response.data['id'] == str(group.id)
+        assert response.data['id'] == six.text_type(group.id)
         assert response.data['firstRelease']['version'] == release.version
 
 
@@ -65,6 +67,12 @@ class GroupUpdateTest(APITestCase):
             project=group.project.id,
         )
         assert group.status == GroupStatus.RESOLVED
+
+        assert GroupSubscription.objects.filter(
+            user=self.user,
+            group=group,
+            is_active=True,
+        ).exists()
 
     def test_snooze_duration(self):
         group = self.create_group(checksum='a' * 32, status=GroupStatus.RESOLVED)
@@ -90,6 +98,12 @@ class GroupUpdateTest(APITestCase):
         group = Group.objects.get(id=group.id)
         assert group.get_status() == GroupStatus.MUTED
 
+        assert GroupSubscription.objects.filter(
+            user=self.user,
+            group=group,
+            is_active=True,
+        ).exists()
+
     def test_bookmark(self):
         self.login_as(user=self.user)
 
@@ -106,6 +120,12 @@ class GroupUpdateTest(APITestCase):
         # ensure we've created the bookmark
         assert GroupBookmark.objects.filter(
             group=group, user=self.user).exists()
+
+        assert GroupSubscription.objects.filter(
+            user=self.user,
+            group=group,
+            is_active=True,
+        ).exists()
 
     def test_assign(self):
         self.login_as(user=self.user)
@@ -134,6 +154,12 @@ class GroupUpdateTest(APITestCase):
 
         assert GroupAssignee.objects.filter(
             group=group, user=self.user
+        ).exists()
+
+        assert GroupSubscription.objects.filter(
+            user=self.user,
+            group=group,
+            is_active=True,
         ).exists()
 
         response = self.client.put(url, data={
@@ -187,6 +213,32 @@ class GroupUpdateTest(APITestCase):
 
         assert not GroupSeen.objects.filter(
             group=group, user=self.user).exists()
+
+    def test_subscription(self):
+        self.login_as(user=self.user)
+        group = self.create_group()
+
+        url = '/api/0/issues/{}/'.format(group.id)
+
+        resp = self.client.put(url, data={
+            'isSubscribed': 'true',
+        })
+        assert resp.status_code == 200, resp.content
+        assert GroupSubscription.objects.filter(
+            user=self.user,
+            group=group,
+            is_active=True,
+        ).exists()
+
+        resp = self.client.put(url, data={
+            'isSubscribed': 'false',
+        })
+        assert resp.status_code == 200, resp.content
+        assert GroupSubscription.objects.filter(
+            user=self.user,
+            group=group,
+            is_active=False,
+        ).exists()
 
 
 class GroupDeleteTest(APITestCase):

@@ -35,6 +35,7 @@ const GroupEventDetails = React.createClass({
     }
   },
 
+
   fetchData() {
     let eventId = this.props.params.eventId || 'latest';
 
@@ -113,7 +114,7 @@ const GroupEventDetails = React.createClass({
                 group={group}
                 event={evt}
                 orgId={params.orgId}
-                projectId={params.projectId} />
+                project={this.getProject()} />
             )}
           </div>
           <div className="col-md-3">

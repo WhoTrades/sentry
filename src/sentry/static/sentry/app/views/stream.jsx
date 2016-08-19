@@ -3,7 +3,7 @@ import Reflux from 'reflux';
 import {History} from 'react-router';
 import {Link} from 'react-router';
 import Cookies from 'js-cookie';
-import Sticky from 'react-sticky';
+import {StickyContainer, Sticky} from 'react-sticky';
 import classNames from 'classnames';
 import _ from 'underscore';
 
@@ -54,6 +54,7 @@ const Stream = React.createClass({
     let searchId = this.props.params.searchId || null;
     return {
       groupIds: [],
+      isDefaultSearch: null,
       searchId: searchId,
       // if we have no query then we can go ahead and fetch data
       loading: (searchId || !this.hasQuery() ? true : false),
@@ -99,8 +100,10 @@ const Stream = React.createClass({
       return;
     }
 
-    if (nextProps.params.searchId !== this.state.searchId
-          || nextProps.location.search !== this.props.location.search) {
+    let searchIdChanged = this.state.isDefaultSearch ?
+      nextProps.params.searchId : nextProps.params.searchId !== this.state.searchId;
+
+    if (searchIdChanged || nextProps.location.search !== this.props.location.search) {
       // TODO(dcramer): handle 404 from popState on searchId
       this.setState(this.getQueryState(nextProps), this.fetchData);
     }
@@ -135,6 +138,7 @@ const Stream = React.createClass({
     this.api.request(`/projects/${orgId}/${projectId}/searches/`, {
       success: (data) => {
         let newState = {
+          isDefaultSearch: false,
           savedSearchLoading: false,
           savedSearchList: data,
           loading: false,
@@ -152,6 +156,7 @@ const Stream = React.createClass({
               savedSearchLoading: false,
               savedSearchList: data,
               searchId: null,
+              isDefaultSearch: true,
             }, this.transitionTo);
           }
         } else if (!this.hasQuery()) {
@@ -166,6 +171,7 @@ const Stream = React.createClass({
           if (defaultResults.length) {
             newState.searchId = defaultResults[0].id;
             newState.query = defaultResults[0].query;
+            newState.isDefaultSearch = true;
           }
         }
         this.setState(newState, needsData ? this.fetchData : null);
@@ -175,10 +181,11 @@ const Stream = React.createClass({
         logAjaxError(error);
         this.setState({
           loading: false,
+          isDefaultSearch: null,
           searchId: null,
           savedSearchList: [],
           savedSearchLoading: false,
-          query: '',
+          query: ''
         });
       }
     });
@@ -248,6 +255,7 @@ const Stream = React.createClass({
       statsPeriod: statsPeriod,
       query: hasQuery ? currentQuery.query : '',
       searchId: searchId,
+      isDefaultSearch: false
     };
 
     // state is not yet defined
@@ -268,6 +276,7 @@ const Stream = React.createClass({
         return search.isDefault;
       });
       if (defaultResult.length) {
+        newState.isDefaultSearch = true;
         newState.searchId = defaultResult[0].id;
         newState.query = defaultResult[0].query;
       } else {
@@ -295,7 +304,7 @@ const Stream = React.createClass({
     let url = this.getGroupListEndpoint();
 
     let requestParams = {
-      query: this.state.query,
+      query: this.state.query.replace(/^\s+|\s+$/g, ''),
       limit: this.props.maxItems,
       sort: this.state.sort,
       statsPeriod: this.state.statsPeriod,
@@ -492,6 +501,12 @@ const Stream = React.createClass({
   renderAwaitingEvents() {
     let org = this.getOrganization();
     let project = this.getProject();
+    let sampleLink = null;
+
+    if (this.state.groupIds.length > 0) {
+      let sampleIssueId = this.state.groupIds[0];
+      sampleLink = <p><Link to={`/${org.slug}/${project.slug}/issues/${sampleIssueId}/?sample`}>{t('Or see a sample Javascript event')}</Link></p>;
+    }
 
     return (
       <div className="box awaiting-events">
@@ -500,6 +515,7 @@ const Stream = React.createClass({
           <h3>{t('Waiting for events…')}</h3>
           <p>{tct('Our error robot is waiting to [cross:devour] receive your first event.', {cross: <span className="strikethrough"/>})}</p>
           <p><Link to={`/${org.slug}/${project.slug}/settings/install/?onboarding=1`} className="btn btn-primary btn-lg">{t('Installation Instructions')}</Link></p>
+          {sampleLink}
         </div>
       </div>
     );
@@ -559,52 +575,54 @@ const Stream = React.createClass({
     let access = this.getAccess();
 
     return (
-      <div className={classNames(classes)}>
-        <div className="stream-content">
-          <StreamFilters
-            access={access}
-            orgId={orgId}
-            projectId={projectId}
-            query={this.state.query}
-            sort={this.state.sort}
-            tags={this.state.tags}
-            searchId={searchId}
-            defaultQuery={this.props.defaultQuery}
-            onSortChange={this.onSortChange}
-            onSearch={this.onSearch}
-            onSavedSearchCreate={this.onSavedSearchCreate}
-            onSidebarToggle={this.onSidebarToggle}
-            isSearchDisabled={this.state.isSidebarVisible}
-            savedSearchList={this.state.savedSearchList}
-          />
-          <div className="group-header">
+      <StickyContainer>
+        <div className={classNames(classes)}>
+          <div className="stream-content">
+            <StreamFilters
+              access={access}
+              orgId={orgId}
+              projectId={projectId}
+              query={this.state.query}
+              sort={this.state.sort}
+              tags={this.state.tags}
+              searchId={searchId}
+              defaultQuery={this.props.defaultQuery}
+              onSortChange={this.onSortChange}
+              onSearch={this.onSearch}
+              onSavedSearchCreate={this.onSavedSearchCreate}
+              onSidebarToggle={this.onSidebarToggle}
+              isSearchDisabled={this.state.isSidebarVisible}
+              savedSearchList={this.state.savedSearchList}
+            />
             <Sticky onStickyStateChange={this.onStickyStateChange}>
-              <div className={this.state.isStickyHeader ? 'container' : null}>
-                <StreamActions
-                  orgId={params.orgId}
-                  projectId={params.projectId}
-                  query={this.state.query}
-                  onSelectStatsPeriod={this.onSelectStatsPeriod}
-                  onRealtimeChange={this.onRealtimeChange}
-                  realtimeActive={this.state.realtimeActive}
-                  statsPeriod={this.state.statsPeriod}
-                  groupIds={this.state.groupIds}
-                  allResultsVisible={this.allResultsVisible()}/>
+              <div className="group-header">
+                <div className={this.state.isStickyHeader ? 'container' : null}>
+                  <StreamActions
+                    orgId={params.orgId}
+                    projectId={params.projectId}
+                    query={this.state.query}
+                    onSelectStatsPeriod={this.onSelectStatsPeriod}
+                    onRealtimeChange={this.onRealtimeChange}
+                    realtimeActive={this.state.realtimeActive}
+                    statsPeriod={this.state.statsPeriod}
+                    groupIds={this.state.groupIds}
+                    allResultsVisible={this.allResultsVisible()}/>
+                </div>
               </div>
             </Sticky>
+            {this.renderStreamBody()}
+            <Pagination pageLinks={this.state.pageLinks}/>
           </div>
-          {this.renderStreamBody()}
-          <Pagination pageLinks={this.state.pageLinks}/>
+          <StreamSidebar
+            loading={this.state.tagsLoading}
+            tags={this.state.tags}
+            query={this.state.query}
+            onQueryChange={this.onSearch}
+            orgId={params.orgId}
+            projectId={params.projectId}
+            />
         </div>
-        <StreamSidebar
-          loading={this.state.tagsLoading}
-          tags={this.state.tags}
-          query={this.state.query}
-          onQueryChange={this.onSearch}
-          orgId={params.orgId}
-          projectId={params.projectId}
-          />
-      </div>
+      </StickyContainer>
     );
   }
 

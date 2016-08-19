@@ -10,8 +10,9 @@ from __future__ import absolute_import
 
 __all__ = ('Csp',)
 
-from urlparse import urlsplit, urlunsplit
-from sentry.interfaces.base import Interface, InterfaceValidationError
+from six.moves.urllib.parse import urlsplit, urlunsplit
+
+from sentry.interfaces.base import Interface
 from sentry.utils import json
 from sentry.utils.cache import memoize
 from sentry.utils.safe import trim
@@ -32,21 +33,6 @@ KEYWORDS = frozenset((
     "'none'", "'self'", "'unsafe-inline'", "'unsafe-eval'",
 ))
 
-DIRECTIVES = frozenset((
-    'base-uri', 'child-src', 'connect-src', 'default-src',
-    'font-src', 'form-action', 'frame-ancestors',
-    'img-src', 'manifest-src', 'media-src', 'object-src',
-    'plugin-types', 'referrer', 'script-src', 'style-src',
-    'upgrade-insecure-requests',
-
-    # Deprecated directives
-    # > Note: This directive is deprecated. Use child-src instead.
-    # > https://developer.mozilla.org/en-US/docs/Web/Security/CSP/CSP_policy_directives#frame-src
-    # 'frame-src',
-
-    # I don't really know what this even is.
-    # 'sandbox',
-))
 
 ALL_SCHEMES = (
     'data:', 'mediastream:', 'blob:', 'filesystem:',
@@ -57,30 +43,25 @@ SELF = "'self'"
 
 DIRECTIVE_TO_MESSAGES = {
     # 'base-uri': '',
-    'child-src': ("Blocked 'child' from {uri!r}", "Blocked inline 'child'"),
-    'connect-src': ("Blocked 'connect' from {uri!r}", "Blocked inline 'connect'"),
+    'child-src': (u"Blocked 'child' from '{uri}'", "Blocked inline 'child'"),
+    'connect-src': (u"Blocked 'connect' from '{uri}'", "Blocked inline 'connect'"),
     # 'default-src': '',
-    'font-src': ("Blocked 'font' from {uri!r}", "Blocked inline 'font'"),
-    'form-action': ("Blocked 'form' action to {uri!r}",),  # no inline option
+    'font-src': (u"Blocked 'font' from '{uri}'", "Blocked inline 'font'"),
+    'form-action': (u"Blocked 'form' action to '{uri}'",),  # no inline option
     # 'frame-ancestors': '',
-    'img-src': ("Blocked 'image' from {uri!r}", "Blocked inline 'image'"),
-    'manifest-src': ("Blocked 'manifest' from {uri!r}", "Blocked inline 'manifest'"),
-    'media-src': ("Blocked 'media' from {uri!r}", "Blocked inline 'media'"),
-    'object-src': ("Blocked 'object' from {uri!r}", "Blocked inline 'object'"),
+    'img-src': (u"Blocked 'image' from '{uri}'", "Blocked inline 'image'"),
+    'manifest-src': (u"Blocked 'manifest' from '{uri}'", "Blocked inline 'manifest'"),
+    'media-src': (u"Blocked 'media' from '{uri}'", "Blocked inline 'media'"),
+    'object-src': (u"Blocked 'object' from '{uri}'", "Blocked inline 'object'"),
     # 'plugin-types': '',
     # 'referrer': '',
     # 'reflected-xss': '',
-    'script-src': ("Blocked 'script' from {uri!r}", "Blocked unsafe (eval() or inline) 'script'"),
-    'style-src': ("Blocked 'style' from {uri!r}", "Blocked inline 'style'"),
+    'script-src': (u"Blocked 'script' from '{uri}'", "Blocked unsafe (eval() or inline) 'script'"),
+    'style-src': (u"Blocked 'style' from '{uri}'", "Blocked inline 'style'"),
     # 'upgrade-insecure-requests': '',
 }
 
 DEFAULT_MESSAGE = ('Blocked {directive!r} from {uri!r}', 'Blocked inline {directive!r}')
-
-DISALLOWED_SOURCES = (
-    'chrome-extension://',
-    'safari-extension://',
-)
 
 
 class Csp(Interface):
@@ -103,21 +84,6 @@ class Csp(Interface):
     @classmethod
     def to_python(cls, data):
         kwargs = {k: trim(data.get(k, None), 1024) for k in REPORT_KEYS}
-
-        if kwargs['effective_directive'] not in DIRECTIVES:
-            raise InterfaceValidationError("Invalid value for 'effective-directive'")
-
-        # Some reports from Chrome report blocked-uri as just 'about'.
-        # In this case, this is not actionable and is just noisy.
-        # Observed in Chrome 45 and 46.
-        if kwargs['blocked_uri'] == 'about':
-            raise InterfaceValidationError("Invalid value for 'blocked-uri'")
-
-        # Here, we want to block reports that are coming from browser extensions
-        # and other sources that are meaningless
-        if kwargs['source_file'] is not None:
-            if kwargs['source_file'].startswith(DISALLOWED_SOURCES):
-                raise InterfaceValidationError("Invalid value for 'source-file'")
 
         # Anything resulting from an "inline" whatever violation is either sent
         # as 'self', or left off. In the case if it missing, we want to noramalize.
@@ -183,8 +149,8 @@ class Csp(Interface):
         return _normalize_uri(self.document_uri)
 
     def _normalize_directive(self, directive):
-        bits = filter(None, directive.split(' '))
-        return ' '.join([bits[0]] + map(self._normalize_value, bits[1:]))
+        bits = [d for d in directive.split(' ') if d]
+        return ' '.join([bits[0]] + list(map(self._normalize_value, bits[1:])))
 
     def _normalize_value(self, value):
         # > If no scheme is specified, the same scheme as the one used to

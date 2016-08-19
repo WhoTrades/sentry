@@ -11,7 +11,7 @@ from __future__ import absolute_import
 from django.db import models
 
 from sentry.db.models import FlexibleForeignKey, Model, sane_repr
-from sentry.utils.hashlib import sha1
+from sentry.utils.hashlib import sha1_text
 
 
 class ReleaseFile(Model):
@@ -40,6 +40,12 @@ class ReleaseFile(Model):
             self.ident = type(self).get_ident(self.name)
         return super(ReleaseFile, self).save(*args, **kwargs)
 
+    def update(self, *args, **kwargs):
+        # If our name is changing, we must also change the ident
+        if 'name' in kwargs and 'ident' not in kwargs:
+            kwargs['ident'] = self.ident = type(self).get_ident(kwargs['name'])
+        return super(ReleaseFile, self).update(*args, **kwargs)
+
     @classmethod
     def get_ident(cls, name):
-        return sha1(name).hexdigest()
+        return sha1_text(name).hexdigest()

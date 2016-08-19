@@ -7,9 +7,9 @@ sentry.runner.initializer
 """
 from __future__ import absolute_import, print_function
 
-import os
-
 import click
+import os
+import six
 
 from sentry.utils import warnings
 from sentry.utils.warnings import DeprecatedSettingWarning
@@ -66,58 +66,157 @@ def get_asset_version(settings):
 # bootstrapping. Everything else will get validated and used
 # as a part of OptionsManager.
 options_mapper = {
-    'cache.backend': 'SENTRY_CACHE',
-    'cache.options': 'SENTRY_CACHE_OPTIONS',
-    'system.databases': 'DATABASES',
-    'system.debug': 'DEBUG',
+    # 'cache.backend': 'SENTRY_CACHE',
+    # 'cache.options': 'SENTRY_CACHE_OPTIONS',
+    # 'system.databases': 'DATABASES',
+    # 'system.debug': 'DEBUG',
     'system.secret-key': 'SECRET_KEY',
+    'mail.backend': 'EMAIL_BACKEND',
+    'mail.host': 'EMAIL_HOST',
+    'mail.port': 'EMAIL_PORT',
+    'mail.username': 'EMAIL_HOST_USER',
+    'mail.password': 'EMAIL_HOST_PASSWORD',
+    'mail.use-tls': 'EMAIL_USE_TLS',
+    'mail.from': 'SERVER_EMAIL',
+    'mail.subject-prefix': 'EMAIL_SUBJECT_PREFIX',
 }
 
 
-def bootstrap_options(settings, config):
+def bootstrap_options(settings, config=None):
     """
     Quickly bootstrap options that come in from a config file
     and convert options into Django settings that are
     required to even initialize the rest of the app.
     """
-    if config is None:
-        return
-    from sentry.utils.yaml import safe_load
-    from yaml.parser import ParserError
-    from yaml.scanner import ScannerError
-    try:
-        with open(config, 'rb') as fp:
-            options = safe_load(fp)
-    except IOError:
-        # Gracefully fail if yaml file doesn't exist
-        return
-    except (AttributeError, ParserError, ScannerError) as e:
-        from .importer import ConfigurationError
-        raise ConfigurationError('Malformed config.yml file: %s' % unicode(e))
-    # Empty options file, so fail gracefully
-    if options is None:
-        return
-    # Options needs to be a dict
-    if not isinstance(options, dict):
-        from .importer import ConfigurationError
-        raise ConfigurationError('Malformed config.yml file')
+    # Make sure our options have gotten registered
+    from sentry.options import load_defaults
+    load_defaults()
+
+    options = {}
+    if config is not None:
+        # Attempt to load our config yaml file
+        from sentry.utils.yaml import safe_load
+        from yaml.parser import ParserError
+        from yaml.scanner import ScannerError
+        try:
+            with open(config, 'rb') as fp:
+                options = safe_load(fp)
+        except IOError:
+            # Gracefully fail if yaml file doesn't exist
+            pass
+        except (AttributeError, ParserError, ScannerError) as e:
+            from .importer import ConfigurationError
+            raise ConfigurationError('Malformed config.yml file: %s' % six.text_type(e))
+
+        # Empty options file, so fail gracefully
+        if options is None:
+            options = {}
+        # Options needs to be a dict
+        elif not isinstance(options, dict):
+            from .importer import ConfigurationError
+            raise ConfigurationError('Malformed config.yml file')
+
+    from sentry.conf.server import DEAD
+
     # First move options from settings into options
-    for k, v in options_mapper.iteritems():
-        if hasattr(settings, v):
+    for k, v in six.iteritems(options_mapper):
+        if getattr(settings, v, DEAD) is not DEAD and k not in options:
+            warnings.warn(
+                DeprecatedSettingWarning(
+                    options_mapper[k],
+                    "SENTRY_OPTIONS['%s']" % k,
+                )
+            )
             options[k] = getattr(settings, v)
-    for k, v in options.iteritems():
-        # Stuff everything else into SENTRY_OPTIONS
-        # these will be validated later after bootstrapping
+
+    # Stuff everything else into SENTRY_OPTIONS
+    # these will be validated later after bootstrapping
+    for k, v in six.iteritems(options):
         settings.SENTRY_OPTIONS[k] = v
-        # Escalate the few needed to actually get the app bootstrapped into settings
-        if k in options_mapper:
-            setattr(settings, options_mapper[k], v)
+
+    # Now go back through all of SENTRY_OPTIONS and promote
+    # back into settings. This catches the case when values are defined
+    # only in SENTRY_OPTIONS and no config.yml file
+    for o in (settings.SENTRY_DEFAULT_OPTIONS, settings.SENTRY_OPTIONS):
+        for k, v in six.iteritems(o):
+            if k in options_mapper:
+                # Map the mail.backend aliases to something Django understands
+                if k == 'mail.backend':
+                    try:
+                        v = settings.SENTRY_EMAIL_BACKEND_ALIASES[v]
+                    except KeyError:
+                        pass
+                # Escalate the few needed to actually get the app bootstrapped into settings
+                setattr(settings, options_mapper[k], v)
+
+
+def configure_structlog():
+    """
+    Make structlog comply with all of our options.
+    """
+    from django.conf import settings
+    import logging
+    import structlog
+    from sentry import options
+    from sentry.logging import LoggingFormat
+    WrappedDictClass = structlog.threadlocal.wrap_dict(dict)
+    kwargs = {
+        'context_class': WrappedDictClass,
+        'wrapper_class': structlog.stdlib.BoundLogger,
+        'cache_logger_on_first_use': True,
+        'processors': [
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.format_exc_info,
+            structlog.processors.StackInfoRenderer(),
+        ]
+    }
+
+    fmt_from_env = os.environ.get('SENTRY_LOG_FORMAT')
+    if fmt_from_env:
+        settings.SENTRY_OPTIONS['system.logging-format'] = fmt_from_env.lower()
+
+    fmt = options.get('system.logging-format')
+
+    if fmt == LoggingFormat.HUMAN:
+        from sentry.logging.handlers import HumanRenderer
+        kwargs['processors'].extend([
+            structlog.processors.ExceptionPrettyPrinter(),
+            HumanRenderer(),
+        ])
+    elif fmt == LoggingFormat.MACHINE:
+        from sentry.logging.handlers import JSONRenderer
+        kwargs['processors'].append(JSONRenderer())
+
+    structlog.configure(**kwargs)
+
+    lvl = os.environ.get('SENTRY_LOG_LEVEL')
+
+    if lvl and lvl not in logging._levelNames:
+        raise AttributeError('%s is not a valid logging level.' % lvl)
+
+    settings.LOGGING['root'].update({
+        'level': lvl or settings.LOGGING['default_level']
+    })
+
+    if lvl:
+        for logger in settings.LOGGING['overridable']:
+            try:
+                settings.LOGGING['loggers'][logger].update({
+                    'level': lvl
+                })
+            except KeyError:
+                raise KeyError('%s is not a defined logger.' % logger)
+
+    logging.config.dictConfig(settings.LOGGING)
 
 
 def initialize_app(config, skip_backend_validation=False):
     settings = config['settings']
 
     bootstrap_options(settings, config['options'])
+
+    configure_structlog()
 
     fix_south(settings)
 
@@ -132,18 +231,24 @@ def initialize_app(config, skip_backend_validation=False):
     if settings.CELERY_ALWAYS_EAGER and not settings.DEBUG:
         warnings.warn('Sentry is configured to run asynchronous tasks in-process. '
                       'This is not recommended within production environments. '
-                      'See https://docs.getsentry.com/on-premise/server/queue/ for more information.')
+                      'See https://docs.sentry.io/on-premise/server/queue/ for more information.')
 
     if settings.SENTRY_SINGLE_ORGANIZATION:
         settings.SENTRY_FEATURES['organizations:create'] = False
 
-    settings.SUDO_COOKIE_SECURE = getattr(settings, 'SESSION_COOKIE_SECURE', False)
-    settings.SUDO_COOKIE_DOMAIN = getattr(settings, 'SESSION_COOKIE_DOMAIN', None)
-    settings.SUDO_COOKIE_PATH = getattr(settings, 'SESSION_COOKIE_PATH', '/')
+    if not hasattr(settings, 'SUDO_COOKIE_SECURE'):
+        settings.SUDO_COOKIE_SECURE = getattr(settings, 'SESSION_COOKIE_SECURE', False)
+    if not hasattr(settings, 'SUDO_COOKIE_DOMAIN'):
+        settings.SUDO_COOKIE_DOMAIN = getattr(settings, 'SESSION_COOKIE_DOMAIN', None)
+    if not hasattr(settings, 'SUDO_COOKIE_PATH'):
+        settings.SUDO_COOKIE_PATH = getattr(settings, 'SESSION_COOKIE_PATH', '/')
 
-    settings.CSRF_COOKIE_SECURE = getattr(settings, 'SESSION_COOKIE_SECURE', False)
-    settings.CSRF_COOKIE_DOMAIN = getattr(settings, 'SESSION_COOKIE_DOMAIN', None)
-    settings.CSRF_COOKIE_PATH = getattr(settings, 'SESSION_COOKIE_PATH', '/')
+    if not hasattr(settings, 'CSRF_COOKIE_SECURE'):
+        settings.CSRF_COOKIE_SECURE = getattr(settings, 'SESSION_COOKIE_SECURE', False)
+    if not hasattr(settings, 'CSRF_COOKIE_DOMAIN'):
+        settings.CSRF_COOKIE_DOMAIN = getattr(settings, 'SESSION_COOKIE_DOMAIN', None)
+    if not hasattr(settings, 'CSRF_COOKIE_PATH'):
+        settings.CSRF_COOKIE_PATH = getattr(settings, 'SESSION_COOKIE_PATH', '/')
 
     settings.CACHES['default']['VERSION'] = settings.CACHE_VERSION
 
@@ -194,7 +299,7 @@ def fix_south(settings):
     settings.SOUTH_DATABASE_ADAPTERS = {}
 
     # South needs an adapter defined conditionally
-    for key, value in settings.DATABASES.iteritems():
+    for key, value in six.iteritems(settings.DATABASES):
         if value['ENGINE'] != 'sentry.db.postgres':
             continue
         settings.SOUTH_DATABASE_ADAPTERS[key] = 'south.db.postgresql_psycopg2'
@@ -215,36 +320,45 @@ def bind_cache_to_option_store():
 
 
 def show_big_error(message):
+    if isinstance(message, six.string_types):
+        lines = message.splitlines()
+    else:
+        lines = message
+    maxline = max(map(len, lines))
     click.echo('', err=True)
-    click.secho('!! %s !!' % ('!' * min(len(message), 80),), err=True, fg='red')
-    click.secho('!! %s !!' % message, err=True, fg='red')
-    click.secho('!! %s !!' % ('!' * min(len(message), 80),), err=True, fg='red')
+    click.secho('!! %s !!' % ('!' * min(maxline, 80),), err=True, fg='red')
+    for line in lines:
+        click.secho('!! %s !!' % line.center(maxline), err=True, fg='red')
+    click.secho('!! %s !!' % ('!' * min(maxline, 80),), err=True, fg='red')
     click.echo('', err=True)
 
 
 def apply_legacy_settings(settings):
+    from sentry import options
+
     # SENTRY_USE_QUEUE used to determine if Celery was eager or not
     if hasattr(settings, 'SENTRY_USE_QUEUE'):
         warnings.warn(
             DeprecatedSettingWarning(
                 'SENTRY_USE_QUEUE',
                 'CELERY_ALWAYS_EAGER',
-                'https://docs.getsentry.com/on-premise/server/queue/',
+                'https://docs.sentry.io/on-premise/server/queue/',
             )
         )
         settings.CELERY_ALWAYS_EAGER = (not settings.SENTRY_USE_QUEUE)
 
-    if not settings.SENTRY_OPTIONS.get('system.admin-email') and hasattr(settings, 'SENTRY_ADMIN_EMAIL'):
-        warnings.warn(DeprecatedSettingWarning('SENTRY_ADMIN_EMAIL', 'SENTRY_OPTIONS["system.admin-email"]'))
-        settings.SENTRY_OPTIONS['system.admin-email'] = settings.SENTRY_ADMIN_EMAIL
-
-    if not settings.SENTRY_OPTIONS.get('system.url-prefix') and hasattr(settings, 'SENTRY_URL_PREFIX'):
-        warnings.warn(DeprecatedSettingWarning('SENTRY_URL_PREFIX', 'SENTRY_OPTIONS["system.url-prefix"]'))
-        settings.SENTRY_OPTIONS['system.url-prefix'] = settings.SENTRY_URL_PREFIX
-
-    if not settings.SENTRY_OPTIONS.get('system.rate-limit') and hasattr(settings, 'SENTRY_SYSTEM_MAX_EVENTS_PER_MINUTE'):
-        warnings.warn(DeprecatedSettingWarning('SENTRY_SYSTEM_MAX_EVENTS_PER_MINUTE', 'SENTRY_OPTIONS["system.rate-limit"]'))
-        settings.SENTRY_OPTIONS['system.rate-limit'] = settings.SENTRY_SYSTEM_MAX_EVENTS_PER_MINUTE
+    for old, new in (
+        ('SENTRY_ADMIN_EMAIL', 'system.admin-email'),
+        ('SENTRY_URL_PREFIX', 'system.url-prefix'),
+        ('SENTRY_SYSTEM_MAX_EVENTS_PER_MINUTE', 'system.rate-limit'),
+        ('SENTRY_ENABLE_EMAIL_REPLIES', 'mail.enable-replies'),
+        ('SENTRY_SMTP_HOSTNAME', 'mail.reply-hostname'),
+        ('MAILGUN_API_KEY', 'mail.mailgun-api-key'),
+    ):
+        if new not in settings.SENTRY_OPTIONS and hasattr(settings, old):
+            warnings.warn(
+                DeprecatedSettingWarning(old, "SENTRY_OPTIONS['%s']" % new))
+            settings.SENTRY_OPTIONS[new] = getattr(settings, old)
 
     if hasattr(settings, 'SENTRY_REDIS_OPTIONS'):
         if 'redis.clusters' in settings.SENTRY_OPTIONS:
@@ -266,11 +380,9 @@ def apply_legacy_settings(settings):
         # This should be removed when ``SENTRY_REDIS_OPTIONS`` is officially
         # deprecated. (This also assumes ``FLAG_NOSTORE`` on the configuration
         # option.)
-        from sentry import options
         settings.SENTRY_REDIS_OPTIONS = options.get('redis.clusters')['default']
 
     if not hasattr(settings, 'SENTRY_URL_PREFIX'):
-        from sentry import options
         url_prefix = options.get('system.url-prefix', silent=True)
         if not url_prefix:
             # HACK: We need to have some value here for backwards compatibility
@@ -283,12 +395,22 @@ def apply_legacy_settings(settings):
 
     # Set ALLOWED_HOSTS if it's not already available
     if not settings.ALLOWED_HOSTS:
-        from .hacks import AllowedHosts
-        settings.ALLOWED_HOSTS = AllowedHosts()
+        settings.ALLOWED_HOSTS = ['*']
 
     if hasattr(settings, 'SENTRY_ALLOW_REGISTRATION'):
         warnings.warn(DeprecatedSettingWarning('SENTRY_ALLOW_REGISTRATION', 'SENTRY_FEATURES["auth:register"]'))
         settings.SENTRY_FEATURES['auth:register'] = settings.SENTRY_ALLOW_REGISTRATION
+
+    settings.DEFAULT_FROM_EMAIL = settings.SENTRY_OPTIONS.get(
+        'mail.from', settings.SENTRY_DEFAULT_OPTIONS.get('mail.from'))
+
+    # HACK(mattrobenolt): This is a one-off assertion for a system.secret-key value.
+    # If this becomes a pattern, we could add another flag to the OptionsManager to cover this, but for now
+    # this is the only value that should prevent the app from booting up. Currently FLAG_REQUIRED is used to
+    # trigger the Installation Wizard, not abort startup.
+    if not settings.SENTRY_OPTIONS.get('system.secret-key'):
+        from .importer import ConfigurationError
+        raise ConfigurationError("`system.secret-key` MUST be set. Use 'sentry config generate-secret-key' to get one.")
 
 
 def skip_migration_if_applied(settings, app_name, table_name,

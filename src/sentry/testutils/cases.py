@@ -11,13 +11,17 @@ from __future__ import absolute_import
 __all__ = (
     'TestCase', 'TransactionTestCase', 'APITestCase', 'AuthProviderTestCase',
     'RuleTestCase', 'PermissionTestCase', 'PluginTestCase', 'CliTestCase',
+    'AcceptanceTestCase',
 )
 
 import base64
+import os
 import os.path
-import urllib
+import pytest
+import six
 
 from click.testing import CliRunner
+from contextlib import contextmanager
 from django.conf import settings
 from django.contrib.auth import login
 from django.core.cache import cache
@@ -27,6 +31,7 @@ from django.test import TestCase, TransactionTestCase
 from django.utils.importlib import import_module
 from exam import before, fixture, Exam
 from rest_framework.test import APITestCase as BaseAPITestCase
+from six.moves.urllib.parse import urlencode
 
 from sentry import auth
 from sentry.auth.providers.dummy import DummyProvider
@@ -47,6 +52,11 @@ class BaseTestCase(Fixtures, Exam):
         resp = getattr(self.client, method.lower())(path)
         assert resp.status_code == 302
         assert resp['Location'].startswith('http://testserver' + reverse('sentry-login'))
+
+    @before
+    def setup_dummy_auth_provider(self):
+        auth.register('dummy', DummyProvider)
+        self.addCleanup(auth.unregister, 'dummy', DummyProvider)
 
     @before
     def setup_session(self):
@@ -122,7 +132,7 @@ class BaseTestCase(Fixtures, Exam):
         super(BaseTestCase, self)._post_teardown()
 
     def _makeMessage(self, data):
-        return json.dumps(data)
+        return json.dumps(data).encode('utf-8')
 
     def _makePostMessage(self, data):
         return base64.b64encode(self._makeMessage(data))
@@ -138,7 +148,7 @@ class BaseTestCase(Fixtures, Exam):
                 reverse('sentry-api-store'), message,
                 content_type='application/octet-stream',
                 HTTP_X_SENTRY_AUTH=get_auth_header(
-                    '_postWithHeader',
+                    '_postWithHeader/0.0.0',
                     key,
                     secret,
                     protocol,
@@ -149,10 +159,10 @@ class BaseTestCase(Fixtures, Exam):
     def _postCspWithHeader(self, data, key=None, **extra):
         if isinstance(data, dict):
             body = json.dumps({'csp-report': data})
-        elif isinstance(data, basestring):
+        elif isinstance(data, six.string_types):
             body = data
         path = reverse('sentry-api-csp-report', kwargs={'project_id': self.project.id})
-        path += '?sentry_key=%s&sentry_version=5' % self.projectkey.public_key
+        path += '?sentry_key=%s' % self.projectkey.public_key
         with self.tasks():
             return self.client.post(
                 path, data=body,
@@ -178,7 +188,7 @@ class BaseTestCase(Fixtures, Exam):
         }
         with self.tasks():
             resp = self.client.get(
-                '%s?%s' % (reverse('sentry-api-store', args=(self.project.pk,)), urllib.urlencode(qs)),
+                '%s?%s' % (reverse('sentry-api-store', args=(self.project.pk,)), urlencode(qs)),
                 **headers
             )
         return resp
@@ -199,7 +209,7 @@ class BaseTestCase(Fixtures, Exam):
         }
         with self.tasks():
             resp = self.client.post(
-                '%s?%s' % (reverse('sentry-api-store', args=(self.project.pk,)), urllib.urlencode(qs)),
+                '%s?%s' % (reverse('sentry-api-store', args=(self.project.pk,)), urlencode(qs)),
                 data=message,
                 content_type='application/json',
                 **headers
@@ -212,6 +222,19 @@ class BaseTestCase(Fixtures, Exam):
         back to the original value when exiting the context.
         """
         return override_options(options)
+
+    @contextmanager
+    def dsn(self, dsn):
+        """
+        A context manager that temporarily sets the internal client's DSN
+        """
+        from raven.contrib.django.models import client
+
+        try:
+            client.set_dsn(dsn)
+            yield
+        finally:
+            client.set_dsn(None)
 
     _postWithSignature = _postWithHeader
     _postWithNewSignature = _postWithHeader
@@ -235,8 +258,10 @@ class AuthProviderTestCase(TestCase):
 
     def setUp(self):
         super(AuthProviderTestCase, self).setUp()
-        auth.register(self.provider_name, self.provider)
-        self.addCleanup(auth.unregister, self.provider_name, self.provider)
+        # TestCase automatically sets up dummy provider
+        if self.provider_name != 'dummy' or self.provider != DummyProvider:
+            auth.register(self.provider_name, self.provider)
+            self.addCleanup(auth.unregister, self.provider_name, self.provider)
 
 
 class RuleTestCase(TestCase):
@@ -315,6 +340,15 @@ class PermissionTestCase(TestCase):
         self.create_member(
             user=user, organization=self.organization,
             role='member', teams=[self.team],
+        )
+
+        self.assert_cannot_access(user, path)
+
+    def assert_manager_cannot_access(self, path):
+        user = self.create_user(is_superuser=False)
+        self.create_member(
+            user=user, organization=self.organization,
+            role='manager', teams=[self.team],
         )
 
         self.assert_cannot_access(user, path)
@@ -413,3 +447,13 @@ class CliTestCase(TestCase):
     def invoke(self, *args):
         args += tuple(self.default_args)
         return self.runner.invoke(self.command, args, obj={})
+
+
+@pytest.mark.usefixtures('browser')
+class AcceptanceTestCase(TransactionTestCase):
+    def save_session(self):
+        self.session.save()
+        self.browser.save_cookie(
+            name=settings.SESSION_COOKIE_NAME,
+            value=self.session.session_key,
+        )

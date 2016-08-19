@@ -3,10 +3,11 @@ import {Link} from 'react-router';
 import LazyLoad from 'react-lazy-load';
 
 import ApiMixin from '../../mixins/apiMixin';
+import {update as projectUpdate} from '../../actionCreators/projects';
 import BarChart from '../../components/barChart';
 import ProjectLabel from '../../components/projectLabel';
-import ConfigStore from '../../stores/configStore';
 import PropTypes from '../../proptypes';
+import TooltipMixin from '../../mixins/tooltip';
 import {sortArray} from '../../utils';
 import {t, tct} from '../../locale';
 
@@ -20,7 +21,16 @@ const ExpandedTeamList = React.createClass({
   },
 
   mixins: [
-    ApiMixin
+    ApiMixin,
+    TooltipMixin(function () {
+      return {
+        selector: '.tip',
+        title: function (instance) {
+          return (this.getAttribute('data-isbookmarked') === 'true' ?
+            'Remove from bookmarks' : 'Add to bookmarks');
+        }
+      };
+    })
   ],
 
   leaveTeam(team) {
@@ -33,7 +43,7 @@ const ExpandedTeamList = React.createClass({
 
   urlPrefix() {
     let org = this.props.organization;
-    return ConfigStore.get('urlPrefix') + '/organizations/' + org.slug;
+    return `/organizations/${org.slug}`;
   },
 
   renderProjectList(team) {
@@ -82,7 +92,7 @@ const ExpandedTeamList = React.createClass({
           <h3>{team.name}</h3>
         </div>
         <div className="box-content">
-          <table className="table project-list">
+          <table className="table table-no-top-border m-b-0">
             {team.projects.length ?
               this.renderProjectList(team)
             :
@@ -94,20 +104,31 @@ const ExpandedTeamList = React.createClass({
     );
   },
 
+  toggleBookmark(project) {
+    projectUpdate(this.api, {
+      orgId: this.props.organization.slug,
+      projectId: project.slug,
+      data: {
+        isBookmarked: !project.isBookmarked
+      }
+    });
+  },
+
   renderProject(project) {
     let org = this.props.organization;
-    let projectStats = this.props.projectStats;
-    let chartData = null;
-    if (projectStats[project.id]) {
-      chartData = projectStats[project.id].map((point) => {
-        return {x: point[0], y: point[1]};
-      });
-    }
+    let chartData = project.stats && project.stats.map(point => {
+      return {x: point[0], y: point[1]};
+    });
 
     return (
-      <tr key={project.id}>
+      <tr key={project.id} className={project.isBookmarked ? 'isBookmarked' : null}>
         <td>
           <h5>
+            <a onClick={this.toggleBookmark.bind(this, project)}
+               className="tip"
+               data-isbookmarked={project.isBookmarked}>
+              {project.isBookmarked ? <span className="icon-star-solid bookmark" /> : <span className="icon-star-outline bookmark" />}
+            </a>
             <Link to={`/${org.slug}/${project.slug}/`}>
               <ProjectLabel project={project} organization={this.props.organization}/>
             </Link>

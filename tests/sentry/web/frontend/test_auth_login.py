@@ -19,6 +19,14 @@ class AuthLoginTest(TestCase):
         assert resp.status_code == 200
         self.assertTemplateUsed('sentry/login.html')
 
+    def test_renders_session_expire_message(self):
+        self.client.cookies['session_expired'] = '1'
+        resp = self.client.get(self.path)
+
+        assert resp.status_code == 200
+        self.assertTemplateUsed(resp, 'sentry/login.html')
+        assert len(resp.context['messages']) == 1
+
     def test_login_invalid_password(self):
         # load it once for test cookie
         self.client.get(self.path)
@@ -68,3 +76,11 @@ class AuthLoginTest(TestCase):
         assert resp.status_code == 200
         assert resp.context['op'] == 'register'
         self.assertTemplateUsed('sentry/login.html')
+
+    def test_already_logged_in(self):
+        self.login_as(self.user)
+        with self.feature('organizations:create'):
+            resp = self.client.get(self.path)
+
+        assert resp.status_code == 302
+        assert resp['Location'] == 'http://testserver' + reverse('sentry-create-organization')

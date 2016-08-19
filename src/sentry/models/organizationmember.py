@@ -7,7 +7,7 @@ sentry.models.organizationmember
 """
 from __future__ import absolute_import, print_function
 
-import logging
+import six
 
 from bitfield import BitField
 from django.conf import settings
@@ -15,7 +15,9 @@ from django.core.urlresolvers import reverse
 from django.db import models, transaction
 from django.db.models import F
 from django.utils import timezone
+from django.utils.encoding import force_bytes
 from hashlib import md5
+from structlog import get_logger
 
 from sentry import roles
 from sentry.db.models import (
@@ -26,6 +28,8 @@ from sentry.utils.http import absolute_uri
 
 
 class OrganizationMemberTeam(BaseModel):
+    __core__ = True
+
     id = BoundedAutoField(primary_key=True)
     team = FlexibleForeignKey('sentry.Team')
     organizationmember = FlexibleForeignKey('sentry.OrganizationMember')
@@ -57,6 +61,8 @@ class OrganizationMember(Model):
     and could be thought of as team owners (though their access level may not)
     be set to ownership.
     """
+    __core__ = True
+
     organization = FlexibleForeignKey('sentry.Organization', related_name="member_set")
 
     user = FlexibleForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
@@ -131,8 +137,9 @@ class OrganizationMember(Model):
     @property
     def token(self):
         checksum = md5()
-        for x in (str(self.organization_id), self.get_email(), settings.SECRET_KEY):
-            checksum.update(x)
+        checksum.update(six.text_type(self.organization_id).encode('utf-8'))
+        checksum.update(self.get_email().encode('utf-8'))
+        checksum.update(force_bytes(settings.SECRET_KEY))
         return checksum.hexdigest()
 
     def send_invite_email(self):
@@ -151,13 +158,14 @@ class OrganizationMember(Model):
             subject='Join %s in using Sentry' % self.organization.name,
             template='sentry/emails/member-invite.txt',
             html_template='sentry/emails/member-invite.html',
+            type='organization.invite',
             context=context,
         )
 
         try:
-            msg.send([self.get_email()])
+            msg.send_async([self.get_email()])
         except Exception as e:
-            logger = logging.getLogger('sentry.mail.errors')
+            logger = get_logger(name='sentry.mail')
             logger.exception(e)
 
     def send_sso_link_email(self):
@@ -175,6 +183,7 @@ class OrganizationMember(Model):
             subject='Action Required for %s' % (self.organization.name,),
             template='sentry/emails/auth-link-identity.txt',
             html_template='sentry/emails/auth-link-identity.html',
+            type='organization.auth_link',
             context=context,
         )
         msg.send_async([self.get_email()])
@@ -184,10 +193,19 @@ class OrganizationMember(Model):
             return self.user.get_display_name()
         return self.email
 
+    def get_label(self):
+        if self.user_id:
+            return self.user.get_label()
+        return self.email or self.id
+
     def get_email(self):
         if self.user_id:
             return self.user.email
         return self.email
+
+    def get_avatar_type(self):
+        if self.user_id:
+            return self.user.get_avatar_type()
 
     def get_audit_log_data(self):
         from sentry.models import Team
@@ -219,6 +237,3 @@ class OrganizationMember(Model):
 
     def get_scopes(self):
         return roles.get(self.role).scopes
-
-    def can_manage_member(self, member):
-        return roles.can_manage(self.role, member.role)

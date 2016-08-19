@@ -8,15 +8,11 @@ from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _
 from uuid import uuid1
 
-from sentry import features
-from sentry.models import (
-    AuditLogEntry, AuditLogEntryEvent, Project, Team
-)
+from sentry.models import AuditLogEntryEvent, Project, Team
 from sentry.web.forms.fields import (
     CustomTypedChoiceField, RangeField, OriginsField, IPNetworksField,
 )
 from sentry.web.frontend.base import ProjectView
-from sentry.utils.strings import validate_callsign
 
 
 BLANK_CHOICE = [("", "")]
@@ -29,8 +25,6 @@ class EditProjectForm(forms.ModelForm):
         label=_('Short name'),
         help_text=_('A unique ID used to identify this project.'),
     )
-    callsign = forms.CharField(label=_('Callsign'),
-        help_text=_('A short (typically two) letter sequence to identify issues.'))
     team = CustomTypedChoiceField(choices=(), coerce=int, required=False)
     origins = OriginsField(label=_('Allowed Domains'), required=False,
         help_text=_('Separate multiple entries with a newline.'))
@@ -38,7 +32,7 @@ class EditProjectForm(forms.ModelForm):
         help_text=_('Outbound requests matching Allowed Domains will have the header "X-Sentry-Token: {token}" appended.'))
     resolve_age = RangeField(label=_('Auto resolve'), required=False,
         min_value=0, max_value=168, step_value=1,
-        help_text=_('Treat an event as resolved if it hasn\'t been seen for this amount of time.'))
+        help_text=_('Automatically resolve an issue if it hasn\'t been seen for this amount of time.'))
     scrub_data = forms.BooleanField(
         label=_('Data Scrubber'),
         help_text=_('Enable server-side data scrubbing.'),
@@ -75,8 +69,15 @@ class EditProjectForm(forms.ModelForm):
     # Options that are overridden by Organization level settings
     org_overrides = ('scrub_data', 'scrub_defaults', 'scrub_ip_address')
 
+    default_environment = forms.CharField(
+        label=_('Default Environment'),
+        help_text=_('The default selected environment when viewing issues.'),
+        widget=forms.TextInput(attrs={'placeholder': _('e.g. production')}),
+        required=False,
+    )
+
     class Meta:
-        fields = ('name', 'team', 'slug', 'callsign')
+        fields = ('name', 'team', 'slug')
         model = Project
 
     def __init__(self, request, organization, team_list, data, instance, *args, **kwargs):
@@ -97,9 +98,6 @@ class EditProjectForm(forms.ModelForm):
 
         self.fields['team'].choices = self.get_team_choices(team_list, instance.team)
         self.fields['team'].widget.choices = self.fields['team'].choices
-
-        if not features.has('organizations:callsigns', organization, actor=request.user):
-            del self.fields['callsign']
 
         # After the Form is initialized, we now need to disable the fields that have been
         # overridden from Organization options.
@@ -156,34 +154,14 @@ class EditProjectForm(forms.ModelForm):
         slug = self.cleaned_data.get('slug')
         if not slug:
             return
-        exists_qs = Project.objects.filter(
-            slug=slug,
-            organization=self.organization
-        ).exclude(id=self.instance.id)
-        if exists_qs.exists():
-            raise forms.ValidationError('Another project is already using that slug')
-        return slug
-
-    def clean_callsign(self):
-        # If no callsign was provided we go with the old one.  This
-        # primarily exists so that people without the callsign feature
-        # enabled will not screw up their callsigns.
-        callsign = self.cleaned_data.get('callsign')
-        if not callsign:
-            return self.instance.callsign
-
-        callsign = validate_callsign(callsign)
-        if callsign is None:
-            raise forms.ValidationError(_('Callsign must be between 2 '
-                                          'and 6 letters'))
         other = Project.objects.filter(
-            callsign=callsign,
+            slug=slug,
             organization=self.organization
         ).exclude(id=self.instance.id).first()
         if other is not None:
-            raise forms.ValidationError(_('Another project (%s) is already '
-                                          'using that callsign') % other.name)
-        return callsign
+            raise forms.ValidationError('Another project (%s) is already '
+                                        'using that slug' % other.name)
+        return slug
 
 
 class ProjectSettingsView(ProjectView):
@@ -218,6 +196,7 @@ class ProjectSettingsView(ProjectView):
                 'scrub_ip_address': bool(project.get_option('sentry:scrub_ip_address', False)),
                 'scrape_javascript': bool(project.get_option('sentry:scrape_javascript', True)),
                 'blacklisted_ips': '\n'.join(project.get_option('sentry:blacklisted_ips', [])),
+                'default_environment': project.get_option('sentry:default_environment'),
             },
         )
 
@@ -235,7 +214,8 @@ class ProjectSettingsView(ProjectView):
                     'sensitive_fields',
                     'scrub_ip_address',
                     'scrape_javascript',
-                    'blacklisted_ips'):
+                    'blacklisted_ips',
+                    'default_environment'):
                 # Value can't be overridden if set on the org level
                 if opt in form.org_overrides and organization.get_option('sentry:%s' % (opt,), False):
                     continue
@@ -247,10 +227,9 @@ class ProjectSettingsView(ProjectView):
 
             project.update_option('sentry:reviewed-callsign', True)
 
-            AuditLogEntry.objects.create(
+            self.create_audit_entry(
+                request,
                 organization=organization,
-                actor=request.user,
-                ip_address=request.META['REMOTE_ADDR'],
                 target_object=project.id,
                 event=AuditLogEntryEvent.PROJECT_EDIT,
                 data=project.get_audit_log_data(),

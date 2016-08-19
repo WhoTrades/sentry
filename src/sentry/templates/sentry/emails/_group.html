@@ -1,0 +1,22 @@
+{% load sentry_helpers %}
+
+{% url 'sentry-group' group.organization.slug group.project.slug group.id as group_link %}
+
+<div class="issue {% if group.is_resolved %}resolved{% endif %}">
+
+  {% if group.data.type == "error" %}
+  <div class="event-type error">
+      <h3>
+        <a href="{% absolute_uri group_link %}">{{ group.data.metadata.type }}</a>
+        <small>{{ group.data.metadata.value|truncatechars:100|soft_break:40 }}</small>
+      </h3>
+    </div>
+  {% else %}
+    <div class="event-type default">
+      <h3>
+        <a href="{% absolute_uri group_link %}">{{ group.message_short|truncatechars:40 }}</a>
+      </h3>
+    </div>
+  {% endif %}
+
+</div>

@@ -26,9 +26,9 @@ from __future__ import absolute_import
 
 import sys
 
-if sys.version_info[:2] < (2, 7):
-    print 'Error: Sentry requires Python 2.7'
-    sys.exit(1)
+# if sys.version_info[:2] != (2, 7):
+#     print 'Error: Sentry requires Python 2.7'
+#     sys.exit(1)
 
 import os
 import json
@@ -46,7 +46,7 @@ from setuptools.command.sdist import sdist as SDistCommand
 from setuptools.command.develop import develop as DevelopCommand
 
 # The version of sentry
-VERSION = '8.3.0.dev0'
+VERSION = '8.8.0.dev0'
 
 # Also see sentry.utils.integrationdocs.DOC_FOLDER
 INTEGRATION_DOC_FOLDER = os.path.join(os.path.abspath(
@@ -68,7 +68,8 @@ IS_LIGHT_BUILD = os.environ.get('SENTRY_LIGHT_BUILD') == '1'
 
 dev_requires = [
     'Babel',
-    'flake8>=2.0,<2.1',
+    'flake8>=2.6,<2.7',
+    'pycodestyle>=2.0,<2.1',
     'isort>=4.2.2,<4.3.0',
 ]
 
@@ -82,62 +83,69 @@ tests_require = [
     'pytest-xdist>=1.11.0,<1.12.0',
     'python-coveralls',
     'responses',
+    'percy>=0.2.5',
 ]
 
 
 install_requires = [
-    'BeautifulSoup>=3.2.1,<3.3.0',
     'celery>=3.1.8,<3.1.19',
     'click>=5.0,<7.0',
+    # 'cryptography>=1.3,<1.4',
     'cssutils>=0.9.9,<0.10.0',
     'Django>=1.6.0,<1.7',
     'django-bitfield>=1.7.0,<1.8.0',
     'django-crispy-forms>=1.4.0,<1.5.0',
     'django-debug-toolbar>=1.3.2,<1.4.0',
-    'django-paging>=0.2.5,<0.3.0',
     'django-jsonfield>=0.9.13,<0.9.14',
     'django-picklefield>=0.3.0,<0.4.0',
     'django-recaptcha>=1.0.4,<1.1.0',
-    'django-social-auth>=0.7.28,<0.8.0',
-    'django-sudo>=1.2.0,<1.3.0',
+    'django-sudo>=2.1.0,<3.0.0',
     'django-templatetag-sugar>=0.1.0',
     'djangorestframework>=2.3.8,<2.4.0',
     'email-reply-parser>=0.2.0,<0.3.0',
     'enum34>=0.9.18,<1.2.0',
     'exam>=0.5.1',
+    # broken on python3
     'hiredis>=0.1.0,<0.2.0',
-    'ipaddr>=2.1.11,<2.2.0',
-    'kombu==3.0.30',
+    'honcho>=0.7.0,<0.8.0',
+    'kombu==3.0.35',
     'lxml>=3.4.1',
+
+    'ipaddress>=1.0.16,<1.1.0',
     'mock>=0.8.0,<1.1',
+    'oauth2>=1.5.167',
     'petname>=1.7,<1.8',
-    'progressbar>=2.2,<2.4',
+    'Pillow>=3.2.0,<3.3.0',
+    'progressbar2>=3.10,<3.11',
     'psycopg2>=2.6.0,<2.7.0',
     'pytest>=2.6.4,<2.7.0',
     'pytest-django>=2.9.1,<2.10.0',
+    'pytest-html>=1.9.0,<1.10.0',
     'python-dateutil>=2.0.0,<3.0.0',
     'python-memcached>=1.53,<2.0.0',
-    'PyYAML>=3.11,<4.0',
-    'raven>=5.3.0',
+    'python-openid>=2.2',
+    'PyYAML>=3.11,<3.12',
+    'raven>=5.21.0,<6.0.0',
     'redis>=2.10.3,<2.11.0',
-    'requests%s>=2.9.1,<2.10.0' % (not IS_LIGHT_BUILD and '[security]' or ''),
+    'requests[security]>=2.9.1,<2.11.0',
+    'selenium>=2.53,<2.60',
     'simplejson>=3.2.0,<3.9.0',
-    'six>=1.6.0,<2.0.0',
+    'six>=1.10.0,<1.11.0',
     'setproctitle>=1.1.7,<1.2.0',
     'statsd>=3.1.0,<3.2.0',
+    'structlog==16.1.0',
     'South==1.0.1',
-    'toronado>=0.0.4,<0.1.0',
-    'ua-parser>=0.6.1,<0.7.0',
-    'urllib3>=1.14,<1.15',
+    'toronado>=0.0.10,<0.1.0',
+    'ua-parser>=0.6.1,<0.8.0',
+    'urllib3>=1.14,<1.17',
     'uwsgi>2.0.0,<2.1.0',
-    'rb>=1.4.0,<2.0.0',
-]
-
-postgres_requires = [
+    'rb>=1.5.0,<2.0.0',
+    'qrcode>=5.2.2,<6.0.0',
+    'python-u2flib-server>=4.0.1,<4.1.0',
 ]
 
 dsym_requires = [
-    'symsynd>=0.2.0,<1.0.0',
+    'symsynd>=0.8.3,<1.0.0',
 ]
 
 
@@ -309,6 +317,17 @@ class BuildJavascriptCommand(Command):
                 log.fatal('Could not determine sentry version or build')
                 sys.exit(1)
 
+            node_version = []
+            for app in 'node', 'npm':
+                try:
+                    node_version.append(check_output([app, '--version']).rstrip())
+                except OSError:
+                    log.fatal('Cannot find `{0}` executable. Please install {0}`'
+                              ' and try again.'.format(app))
+                    sys.exit(1)
+
+            log.info('using node ({}) and npm ({})'.format(*node_version))
+
             try:
                 self._build_static()
             except Exception:
@@ -369,8 +388,8 @@ class BuildJavascriptCommand(Command):
             check_output(['git', 'submodule', 'init'], cwd=work_path)
             check_output(['git', 'submodule', 'update'], cwd=work_path)
 
-        log.info("running [npm install --quiet]")
-        check_output(['npm', 'install', '--quiet'], cwd=work_path)
+        log.info("running [npm install --production --quiet]")
+        check_output(['npm', 'install', '--production', '--quiet'], cwd=work_path)
 
         # By setting NODE_ENV=production, a few things happen
         #   * React optimizes out certain code paths
@@ -458,7 +477,7 @@ setup(
     extras_require={
         'tests': tests_require,
         'dev': dev_requires,
-        'postgres': install_requires + postgres_requires,
+        'postgres': install_requires,
         'dsym': dsym_requires,
     },
     cmdclass=cmdclass,

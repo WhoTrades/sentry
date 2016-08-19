@@ -1,5 +1,7 @@
 from __future__ import absolute_import
 
+import six
+
 from sentry.api.serializers import Serializer, register, serialize
 from sentry.models import GroupSeen
 
@@ -7,16 +9,15 @@ from sentry.models import GroupSeen
 @register(GroupSeen)
 class GroupSeenSerializer(Serializer):
     def get_attrs(self, item_list, user):
-        user_list = [i.user for i in item_list]
         user_map = {
-            u: d
-            for u, d in zip(user_list, serialize(user_list, user))
+            d['id']: d
+            for d in serialize(set(i.user for i in item_list), user)
         }
 
         result = {}
         for item in item_list:
             result[item] = {
-                'user': user_map[item.user],
+                'user': user_map[six.text_type(item.user_id)],
             }
         return result
 

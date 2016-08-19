@@ -1,5 +1,7 @@
 from __future__ import absolute_import
 
+import six
+
 from django.core.urlresolvers import reverse
 from mock import patch
 
@@ -18,7 +20,7 @@ class OrganizationDetailsTest(APITestCase):
         response = self.client.get(url, format='json')
         assert response.data['onboardingTasks'] == []
         assert response.status_code == 200, response.content
-        assert response.data['id'] == str(org.id)
+        assert response.data['id'] == six.text_type(org.id)
 
         project = self.create_project(organization=org)
         project_created.send(project=project, user=self.user, sender=type(project))
@@ -91,7 +93,7 @@ class OrganizationDeleteTest(APITestCase):
 
         mock_delete_organization.delay.assert_called_once_with(
             object_id=org.id,
-            countdown=3600,
+            countdown=86400,
         )
 
     def test_cannot_remove_as_admin(self):

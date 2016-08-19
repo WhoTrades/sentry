@@ -9,12 +9,12 @@ from rest_framework import serializers, status
 from rest_framework.response import Response
 
 from sentry.api.base import DocSection
-from sentry.api.bases.project import ProjectEndpoint
+from sentry.api.bases.project import ProjectEndpoint, ProjectPermission
 from sentry.api.decorators import sudo_required
 from sentry.api.serializers import serialize
 from sentry.models import (
     AuditLogEntryEvent, Group, GroupStatus, Project, ProjectBookmark,
-    ProjectStatus
+    ProjectStatus, UserOption
 )
 from sentry.plugins import plugins
 from sentry.tasks.deletion import delete_project
@@ -66,14 +66,31 @@ def clean_newline_inputs(value):
     return result
 
 
-class ProjectSerializer(serializers.Serializer):
+class ProjectMemberSerializer(serializers.Serializer):
     isBookmarked = serializers.BooleanField()
+    isSubscribed = serializers.BooleanField()
+
+
+class ProjectAdminSerializer(serializers.Serializer):
+    isBookmarked = serializers.BooleanField()
+    isSubscribed = serializers.BooleanField()
     name = serializers.CharField(max_length=200)
-    slug = serializers.SlugField(max_length=200)
+    slug = serializers.RegexField(r'^[a-z0-9_\-]+$', max_length=50)
+
+
+class RelaxedProjectPermission(ProjectPermission):
+    scope_map = {
+        'GET': ['project:read', 'project:write', 'project:delete'],
+        'POST': ['project:write', 'project:delete'],
+        # PUT checks for permissions based on fields
+        'PUT': ['project:read', 'project:write', 'project:delete'],
+        'DELETE': ['project:delete'],
+    }
 
 
 class ProjectDetailsEndpoint(ProjectEndpoint):
     doc_section = DocSection.PROJECTS
+    permission_classes = [RelaxedProjectPermission]
 
     def _get_unresolved_count(self, project):
         queryset = Group.objects.filter(
@@ -119,6 +136,10 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
             'sentry:scrub_data': bool(project.get_option('sentry:scrub_data', True)),
             'sentry:scrub_defaults': bool(project.get_option('sentry:scrub_defaults', True)),
             'sentry:sensitive_fields': project.get_option('sentry:sensitive_fields', []),
+            'sentry:csp_ignored_sources_defaults': bool(project.get_option('sentry:csp_ignored_sources_defaults', True)),
+            'sentry:csp_ignored_sources': '\n'.join(project.get_option('sentry:csp_ignored_sources', []) or []),
+            'sentry:default_environment': project.get_option('sentry:default_environment'),
+            'feedback:branding': project.get_option('feedback:branding', '1') == '1',
         }
         data['activePlugins'] = active_plugins
         data['team'] = serialize(project.team, request.user)
@@ -133,7 +154,6 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
         return Response(data)
 
     @attach_scenarios([update_project_scenario])
-    @sudo_required
     def put(self, request, project):
         """
         Update a Project
@@ -154,7 +174,17 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
                                project settings.
         :auth: required
         """
-        serializer = ProjectSerializer(data=request.DATA, partial=True)
+        has_project_write = (
+            (request.auth and request.auth.has_scope('project:write')) or
+            (request.access and request.access.has_scope('project:write'))
+        )
+
+        if has_project_write:
+            serializer_cls = ProjectAdminSerializer
+        else:
+            serializer_cls = ProjectMemberSerializer
+
+        serializer = serializer_cls(data=request.DATA, partial=True)
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
 
@@ -187,35 +217,49 @@ class ProjectDetailsEndpoint(ProjectEndpoint):
                 user=request.user,
             ).delete()
 
-        options = request.DATA.get('options', {})
-        if 'sentry:origins' in options:
-            project.update_option(
-                'sentry:origins',
-                clean_newline_inputs(options['sentry:origins'])
-            )
-        if 'sentry:resolve_age' in options:
-            project.update_option('sentry:resolve_age', int(options['sentry:resolve_age']))
-        if 'sentry:scrub_data' in options:
-            project.update_option('sentry:scrub_data', bool(options['sentry:scrub_data']))
-        if 'sentry:scrub_defaults' in options:
-            project.update_option('sentry:scrub_defaults', bool(options['sentry:scrub_defaults']))
-        if 'sentry:sensitive_fields' in options:
-            project.update_option(
-                'sentry:sensitive_fields',
-                [s.strip().lower() for s in options['sentry:sensitive_fields']]
-            )
+        if result.get('isSubscribed'):
+            UserOption.objects.set_value(request.user, project, 'mail:alert', 1)
+        elif result.get('isSubscribed') is False:
+            UserOption.objects.set_value(request.user, project, 'mail:alert', 0)
 
-        self.create_audit_entry(
-            request=request,
-            organization=project.organization,
-            target_object=project.id,
-            event=AuditLogEntryEvent.PROJECT_EDIT,
-            data=project.get_audit_log_data(),
-        )
+        if has_project_write:
+            options = request.DATA.get('options', {})
+            if 'sentry:origins' in options:
+                project.update_option(
+                    'sentry:origins',
+                    clean_newline_inputs(options['sentry:origins'])
+                )
+            if 'sentry:resolve_age' in options:
+                project.update_option('sentry:resolve_age', int(options['sentry:resolve_age']))
+            if 'sentry:scrub_data' in options:
+                project.update_option('sentry:scrub_data', bool(options['sentry:scrub_data']))
+            if 'sentry:scrub_defaults' in options:
+                project.update_option('sentry:scrub_defaults', bool(options['sentry:scrub_defaults']))
+            if 'sentry:sensitive_fields' in options:
+                project.update_option(
+                    'sentry:sensitive_fields',
+                    [s.strip().lower() for s in options['sentry:sensitive_fields']]
+                )
+            if 'sentry:csp_ignored_sources_defaults' in options:
+                project.update_option('sentry:csp_ignored_sources_defaults', bool(options['sentry:csp_ignored_sources_defaults']))
+            if 'sentry:csp_ignored_sources' in options:
+                project.update_option(
+                    'sentry:csp_ignored_sources',
+                    clean_newline_inputs(options['sentry:csp_ignored_sources']))
+            if 'feedback:branding' in options:
+                project.update_option('feedback:branding', '1' if options['feedback:branding'] else '0')
+
+            self.create_audit_entry(
+                request=request,
+                organization=project.organization,
+                target_object=project.id,
+                event=AuditLogEntryEvent.PROJECT_EDIT,
+                data=project.get_audit_log_data(),
+            )
 
         data = serialize(project, request.user)
         data['options'] = {
-            'sentry:origins': '\n'.join(project.get_option('sentry:origins', '*') or []),
+            'sentry:origins': '\n'.join(project.get_option('sentry:origins', ['*']) or []),
             'sentry:resolve_age': int(project.get_option('sentry:resolve_age', 0)),
         }
         return Response(data)

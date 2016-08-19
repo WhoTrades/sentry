@@ -1,24 +1,46 @@
 import React from 'react';
 
 import {logException} from '../../utils/logging';
+import EventContexts from './contexts';
+import EventContextSummary from './contextSummary';
 import EventDataSection from './eventDataSection';
 import EventErrors from './errors';
 import EventExtraData from './extraData';
 import EventPackageData from './packageData';
 import EventTags from './eventTags';
-import EventMessage from './message';
-import EventUser from './user';
+import EventSdk from './sdk';
+import EventDevice from './device';
 import EventUserReport from './userReport';
 import PropTypes from '../../proptypes';
 import utils from '../../utils';
 import {t} from '../../locale';
+
+import ExceptionInterface from './interfaces/exception';
+import MessageInterface from './interfaces/message';
+import RequestInterface from './interfaces/request';
+import StacktraceInterface from './interfaces/stacktrace';
+import TemplateInterface from './interfaces/template';
+import CspInterface from './interfaces/csp';
+import BreadcrumbsInterface from './interfaces/breadcrumbs';
+import ThreadsInterface from './interfaces/threads';
+
+export const INTERFACES = {
+  exception: ExceptionInterface,
+  message: MessageInterface,
+  request: RequestInterface,
+  stacktrace: StacktraceInterface,
+  template: TemplateInterface,
+  csp: CspInterface,
+  breadcrumbs: BreadcrumbsInterface,
+  threads: ThreadsInterface,
+};
 
 const EventEntries = React.createClass({
   propTypes: {
     group: PropTypes.Group.isRequired,
     event: PropTypes.Event.isRequired,
     orgId: React.PropTypes.string.isRequired,
-    projectId: React.PropTypes.string.isRequired,
+    project: React.PropTypes.object.isRequired,
     // TODO(dcramer): ideally isShare would be replaced with simple permission
     // checks
     isShare: React.PropTypes.bool
@@ -34,19 +56,13 @@ const EventEntries = React.createClass({
     return this.props.event.id !== nextProps.event.id;
   },
 
-  // TODO(dcramer): make this extensible
-  interfaces: {
-    exception: require('./interfaces/exception'),
-    request: require('./interfaces/request'),
-    stacktrace: require('./interfaces/stacktrace'),
-    template: require('./interfaces/template'),
-    csp: require('./interfaces/csp'),
-  },
+  interfaces: INTERFACES,
 
-  render(){
+  render() {
     let group = this.props.group;
     let evt = this.props.event;
     let isShare = this.props.isShare;
+    let project = this.props.project;
 
     let entries = evt.entries.map((entry, entryIdx) => {
       try {
@@ -79,9 +95,16 @@ const EventEntries = React.createClass({
       }
     });
 
-    let {orgId, projectId} = this.props;
+    let hasContext = (
+      !utils.objectIsEmpty(evt.user) || !utils.objectIsEmpty(evt.contexts)
+    );
+
+    let hasContextSummary = (
+      hasContext && (evt.platform === 'cocoa' || evt.platform === 'javascript')
+    );
+
     return (
-      <div>
+      <div className="entries">
         {evt.userReport &&
           <EventUserReport
             group={group}
@@ -92,20 +115,31 @@ const EventEntries = React.createClass({
             group={group}
             event={evt} />
         }
-        <EventMessage
-          group={group}
-          event={evt} />
-        <EventTags
-          group={group}
-          event={evt}
-          orgId={orgId}
-          projectId={projectId} />
-        {!utils.objectIsEmpty(evt.user) &&
-          <EventUser
+        {!utils.objectIsEmpty(evt.sdk) && evt.sdk.upstream.isNewer &&
+          <div className="alert-block alert-info box" style={{padding: '5px 20px'}}>
+            {t('This event was reported with an old version of the %s SDK.', evt.platform)}
+            {evt.sdk.upstream.url &&
+              <a href={evt.sdk.upstream.url}
+                 style={{marginLeft: 10}}>{t('Learn More')}</a>
+            }
+          </div>
+        }
+        {hasContextSummary &&
+          <EventContextSummary
             group={group}
             event={evt} />
         }
+        <EventTags
+          group={group}
+          event={evt}
+          orgId={this.props.orgId}
+          projectId={project.slug} />
         {entries}
+        {hasContext &&
+          <EventContexts
+            group={group}
+            event={evt} />
+        }
         {!utils.objectIsEmpty(evt.context) &&
           <EventExtraData
             group={group}
@@ -113,6 +147,16 @@ const EventEntries = React.createClass({
         }
         {!utils.objectIsEmpty(evt.packages) &&
           <EventPackageData
+            group={group}
+            event={evt} />
+        }
+        {!utils.objectIsEmpty(evt.device) &&
+          <EventDevice
+            group={group}
+            event={evt} />
+        }
+        {!utils.objectIsEmpty(evt.sdk) &&
+          <EventSdk
             group={group}
             event={evt} />
         }

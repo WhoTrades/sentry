@@ -16,7 +16,7 @@
 
   <p>To send data to Sentry you will need to configure an SDK with a client key (usually referred to as the
     <code>SENTRY_DSN</code> value). For more information on integrating Sentry with your application take
-    a look at our <a href="https://docs.getsentry.com">documentation</a>.</p>
+    a look at our <a href="https://docs.sentry.io">documentation</a>.</p>
 
     <div class="client-key-list">
       {% for key in key_list|dictsortreversed:"is_active" %}
@@ -59,6 +59,14 @@
             <div class="form-control disabled auto-select">{{ key.dsn_public }}</div>
             <div class="help-block">{% blocktrans with 'https://github.com/getsentry/raven-js' as link %}Use your public DSN with browser-based clients such as <a href="{{ link }}">raven-js</a>.{% endblocktrans %}</div>
           </div>
+
+          {% if organization.flags.early_adopter %}
+          <div class="form-group">
+            <label>{% trans "CSP Endpoint" %}</label>
+            <div class="form-control disabled auto-select">{{ key.csp_endpoint }}</div>
+            <div class="help-block">{% blocktrans %}Use your CSP endpoint in the <code>report-uri</code> directive in your <code>Content-Security-Policy</code> header.{% endblocktrans %}</div>
+          </div>
+          {% endif %}
         </div>
       {% endfor %}
     </div>

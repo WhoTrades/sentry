@@ -1,5 +1,7 @@
 from __future__ import absolute_import, division, print_function
 
+import six
+
 from datetime import timedelta
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -15,7 +17,8 @@ from sentry.constants import DEFAULT_SORT_OPTION
 from sentry.db.models.query import create_or_update
 from sentry.models import (
     Activity, EventMapping, Group, GroupBookmark, GroupResolution, GroupSeen,
-    GroupSnooze, GroupStatus, Release, TagKey
+    GroupSubscription, GroupSubscriptionReason, GroupSnooze, GroupStatus,
+    Release, TagKey
 )
 from sentry.models.group import looks_like_short_id
 from sentry.search.utils import parse_query
@@ -79,6 +82,7 @@ class GroupSerializer(serializers.Serializer):
     hasSeen = serializers.BooleanField()
     isBookmarked = serializers.BooleanField()
     isPublic = serializers.BooleanField()
+    isSubscribed = serializers.BooleanField()
     merge = serializers.BooleanField()
     snoozeDuration = serializers.IntegerField()
 
@@ -184,7 +188,7 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
             # disable stats
             stats_period = None
 
-        query = request.GET.get('query')
+        query = request.GET.get('query', '').strip()
         if query:
             matching_group = None
             if len(query) == 32:
@@ -222,7 +226,7 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
         try:
             query_kwargs = self._build_query_params_from_request(request, project)
         except ValidationError as exc:
-            return Response({'detail': unicode(exc)}, status=400)
+            return Response({'detail': six.text_type(exc)}, status=400)
 
         cursor_result = search.query(**query_kwargs)
 
@@ -320,7 +324,7 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
             try:
                 query_kwargs = self._build_query_params_from_request(request, project)
             except ValidationError as exc:
-                return Response({'detail': unicode(exc)}, status=400)
+                return Response({'detail': six.text_type(exc)}, status=400)
 
             # bulk mutations are limited to 1000 items
             # TODO(dcramer): it'd be nice to support more than this, but its
@@ -331,6 +335,8 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
 
             group_list = list(cursor_result)
             group_ids = [g.id for g in group_list]
+
+        is_bulk = len(group_ids) > 1
 
         queryset = Group.objects.filter(
             id__in=group_ids,
@@ -358,6 +364,13 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
                         group=group,
                     ), False
 
+                if acting_user:
+                    GroupSubscription.objects.subscribe(
+                        user=acting_user,
+                        group=group,
+                        reason=GroupSubscriptionReason.status_change,
+                    )
+
                 if created:
                     activity = Activity.objects.create(
                         project=group.project,
@@ -370,7 +383,10 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
                             'version': '',
                         }
                     )
-                    activity.send_notification()
+                    # TODO(dcramer): we need a solution for activity rollups
+                    # before sending notifications on bulk changes
+                    if not is_bulk:
+                        activity.send_notification()
 
             queryset.update(
                 status=GroupStatus.RESOLVED,
@@ -402,13 +418,22 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
                 for group in group_list:
                     group.status = GroupStatus.RESOLVED
                     group.resolved_at = now
+                    if acting_user:
+                        GroupSubscription.objects.subscribe(
+                            user=acting_user,
+                            group=group,
+                            reason=GroupSubscriptionReason.status_change,
+                        )
                     activity = Activity.objects.create(
                         project=group.project,
                         group=group,
                         type=Activity.SET_RESOLVED,
                         user=acting_user,
                     )
-                    activity.send_notification()
+                    # TODO(dcramer): we need a solution for activity rollups
+                    # before sending notifications on bulk changes
+                    if not is_bulk:
+                        activity.send_notification()
 
             result['statusDetails'] = {}
 
@@ -463,6 +488,7 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
 
                 for group in group_list:
                     group.status = new_status
+
                     activity = Activity.objects.create(
                         project=group.project,
                         group=group,
@@ -470,14 +496,23 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
                         user=acting_user,
                         data=activity_data,
                     )
-                    activity.send_notification()
+                    # TODO(dcramer): we need a solution for activity rollups
+                    # before sending notifications on bulk changes
+                    if not is_bulk:
+                        if acting_user:
+                            GroupSubscription.objects.subscribe(
+                                user=acting_user,
+                                group=group,
+                                reason=GroupSubscriptionReason.status_change,
+                            )
+                        activity.send_notification()
 
-        if result.get('hasSeen') and project.member_set.filter(user=request.user).exists():
+        if result.get('hasSeen') and project.member_set.filter(user=acting_user).exists():
             for group in group_list:
                 instance, created = create_or_update(
                     GroupSeen,
                     group=group,
-                    user=request.user,
+                    user=acting_user,
                     project=group.project,
                     values={
                         'last_seen': timezone.now(),
@@ -486,7 +521,7 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
         elif result.get('hasSeen') is False:
             GroupSeen.objects.filter(
                 group__in=group_ids,
-                user=request.user,
+                user=acting_user,
             ).delete()
 
         if result.get('isBookmarked'):
@@ -494,13 +529,31 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
                 GroupBookmark.objects.get_or_create(
                     project=project,
                     group=group,
-                    user=request.user,
+                    user=acting_user,
+                )
+                GroupSubscription.objects.subscribe(
+                    user=acting_user,
+                    group=group,
+                    reason=GroupSubscriptionReason.bookmark,
                 )
         elif result.get('isBookmarked') is False:
             GroupBookmark.objects.filter(
                 group__in=group_ids,
-                user=request.user,
+                user=acting_user,
             ).delete()
+
+        # TODO(dcramer): we could make these more efficient by first
+        # querying for rich rows are present (if N > 2), flipping the flag
+        # on those rows, and then creating the missing rows
+        if result.get('isSubscribed') in (True, False):
+            is_subscribed = result['isSubscribed']
+            for group in group_list:
+                GroupSubscription.objects.create_or_update(
+                    user=acting_user,
+                    group=group,
+                    project=project,
+                    values={'is_active': is_subscribed},
+                )
 
         if result.get('isPublic'):
             queryset.update(is_public=True)
@@ -553,8 +606,8 @@ class ProjectGroupIndexEndpoint(ProjectEndpoint):
             )
 
             result['merge'] = {
-                'parent': str(primary_group.id),
-                'children': [str(g.id) for g in children],
+                'parent': six.text_type(primary_group.id),
+                'children': [six.text_type(g.id) for g in children],
             }
 
         return Response(result)

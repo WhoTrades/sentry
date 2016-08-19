@@ -1,16 +1,23 @@
 import React from 'react';
 import ReactDOM from 'react-dom';
+import {History} from 'react-router';
 import {Link} from 'react-router';
 import jQuery from 'jquery';
 
-import ConfigStore from '../../stores/configStore';
+import {update as projectUpdate} from '../../actionCreators/projects';
+import ApiMixin from '../../mixins/apiMixin';
+
 import ProjectLabel from '../../components/projectLabel';
 import DropdownLink from '../dropdownLink';
 import MenuItem from '../menuItem';
+import TooltipMixin from '../../mixins/tooltip';
+import {sortArray} from '../../utils';
 import {t} from '../../locale';
 
 const ProjectSelector = React.createClass({
   propTypes: {
+    // Accepts a project id (slug) and not a project *object* because ProjectSelector
+    // is created from Django templates, and only organization is serialized
     projectId: React.PropTypes.string,
     organization: React.PropTypes.object.isRequired
   },
@@ -19,15 +26,31 @@ const ProjectSelector = React.createClass({
     location: React.PropTypes.object
   },
 
+  mixins: [
+    ApiMixin,
+    History,
+    TooltipMixin(function () {
+      return {
+        selector: '.tip',
+        title: function (instance) {
+          return (this.getAttribute('data-isbookmarked') === 'true' ?
+            'Remove from bookmarks' : 'Add to bookmarks');
+        }
+      };
+    })
+  ],
+
   getDefaultProps() {
     return {
-      projectId: null,
+      projectId: null
     };
   },
 
   getInitialState() {
     return {
-      filter: ''
+      filter: '',
+      currentIndex: -1,
+      ...this.getProjectState({filter: ''})
     };
   },
 
@@ -45,7 +68,9 @@ const ProjectSelector = React.createClass({
 
   onFilterChange(evt) {
     this.setState({
-      filter: evt.target.value
+      filter: evt.target.value,
+      currentIndex: -1,
+      ...this.getProjectState({filter: evt.target.value})
     });
   },
 
@@ -68,14 +93,28 @@ const ProjectSelector = React.createClass({
   },
 
   close() {
-    this.setState({filter: ''});
+    this.setState({
+      filter: '',
+      currentIndex: -1,
+      ...this.getProjectState({filter: ''})
+    });
     // dropdownLink might not exist because we try to close within
     // onFilterBlur above after a timeout. My hunch is that sometimes
     // this DOM element is removed within the 200ms, so we error out.
     this.refs.dropdownLink && this.refs.dropdownLink.close();
   },
 
-  getProjectNode(team, project, highlightText, hasSingleTeam) {
+  handleBookmarkClick(project) {
+    projectUpdate(this.api, {
+      orgId: this.props.organization.slug,
+      projectId: project.slug,
+      data: {
+        isBookmarked: !project.isBookmarked
+      }
+    });
+  },
+
+  getProjectNode(team, project, highlightText, hasSingleTeam, isSelected) {
     let projectId = project.slug;
     let label = this.getProjectLabel(team, project, hasSingleTeam,
                                      highlightText);
@@ -83,6 +122,7 @@ const ProjectSelector = React.createClass({
     let menuItemProps = {
       key: projectId, // TODO: what if two projects w/ same name under diff orgs?
       linkClassName: projectId == this.props.projectId ? 'active' : '',
+      className: isSelected ? 'project-selected' : '',
 
       // When router is available, use `to` property. Otherwise, use href
       // property. For example - when project selector is loaded on
@@ -91,7 +131,12 @@ const ProjectSelector = React.createClass({
       ...this.getProjectUrlProps(project)
     };
 
-    return <MenuItem {...menuItemProps}>{label}</MenuItem>;
+    return (
+      <MenuItem {...menuItemProps}>
+        {project.isBookmarked && <span className="icon-star-solid bookmark "></span>}
+        {label}
+      </MenuItem>
+    );
   },
 
   getProjectLabel(team, project, hasSingleTeam, highlightText) {
@@ -142,7 +187,7 @@ const ProjectSelector = React.createClass({
     if (this.context.location) {
       return {to: path};
     } else {
-      return {href: ConfigStore.get('urlPrefix') + path};
+      return {href: path};
     }
   },
 
@@ -157,8 +202,16 @@ const ProjectSelector = React.createClass({
     let orgId = org.slug;
     let projectId = project.slug;
 
+    let className = 'bookmark tip ' + (project.isBookmarked ? 'icon-star-solid' : 'icon-star-outline');
     return (
-      <Link to={`/${orgId}/${projectId}/`}>{label}</Link>
+      <span>
+        <a className={className}
+           onClick={this.handleBookmarkClick.bind(this, project)}
+           data-isbookmarked={project.isBookmarked} />
+        <Link to={`/${orgId}/${projectId}/`}>
+          {label}
+        </Link>
+      </span>
     );
   },
 
@@ -168,39 +221,83 @@ const ProjectSelector = React.createClass({
 
   onClose() {
     this.setState({
-      filter: ''
+      filter: '',
+      currentIndex: -1,
+      ...this.getProjectState({filter: ''})
     });
   },
 
-  render() {
+  onKeyDown(evt) {
+    let projects = this.state.projectList;
+    if (evt.key === 'Down' || evt.keyCode === 40) {
+      if (this.state.currentIndex + 1 < projects.length) {
+        this.setState({
+          currentIndex: this.state.currentIndex + 1
+        });
+      }
+    } else if (evt.key === 'Up' || evt.keyCode === 38) {
+      if (this.state.currentIndex > 0) {
+        this.setState({
+          currentIndex: this.state.currentIndex - 1
+        });
+      }
+    } else if (evt.key === 'Enter' || evt.keyCode === 13) {
+      if (this.state.currentIndex > -1) {
+        let url = this.getProjectUrlProps(projects[this.state.currentIndex][1]);
+        if (url.to) {
+          this.history.pushState(null, url.to);
+        } else if (url.href) {
+          window.location = url.href;
+        }
+      }
+    }
+  },
+
+  getProjectState(state) {
+    state = state || this.state;
     let org = this.props.organization;
-    let filter = this.state.filter.toLowerCase();
-    let children = [];
+    let filter = state.filter.toLowerCase();
+    let projectList = [];
     let activeTeam;
     let activeProject;
-    let hasSingleTeam = org.teams.length === 1;
-
     org.teams.forEach((team) => {
       if (!team.isMember) {
         return;
       }
       team.projects.forEach((project) => {
         if (project.slug == this.props.projectId) {
-          activeTeam = team;
           activeProject = project;
+          activeTeam = team;
         }
         let fullName = [team.name, project.name, team.slug, project.slug].join(' ').toLowerCase();
         if (filter && fullName.indexOf(filter) === -1) {
           return;
         }
-        children.push(this.getProjectNode(team, project, this.state.filter, hasSingleTeam));
+        projectList.push([team, project]);
       });
     });
+    return {
+      projectList: projectList,
+      activeTeam: activeTeam,
+      activeProject: activeProject
+    };
+  },
 
+  render() {
+    let org = this.props.organization;
+    let hasSingleTeam = org.teams.length === 1;
+
+    let projectList = sortArray(this.state.projectList, ([team, project]) => {
+      return [!project.isBookmarked, team.name, project.name];
+    });
+
+    let children = projectList.map(([team, project], index) => {
+      return this.getProjectNode(team, project, this.state.filter, hasSingleTeam, this.state.currentIndex === index);
+    });
     return (
       <div className="project-select" ref="container">
-        {activeProject ?
-          this.getLinkNode(activeTeam, activeProject)
+        {this.state.activeProject ?
+          this.getLinkNode(this.state.activeTeam, this.state.activeProject)
         :
           t('Select a project')
         }
@@ -213,6 +310,7 @@ const ProjectSelector = React.createClass({
               placeholder={t('Filter projects')}
               onChange={this.onFilterChange}
               onKeyUp={this.onKeyUp}
+              onKeyDown={this.onKeyDown}
               onBlur={this.onFilterBlur}
               ref="filter" />
           </li>

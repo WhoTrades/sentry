@@ -1,6 +1,7 @@
 from __future__ import absolute_import
 
 import logging
+import six
 import sentry
 
 from django.conf import settings
@@ -50,13 +51,13 @@ class WebHooksPlugin(notify.NotificationPlugin):
 
     def get_group_data(self, group, event):
         data = {
-            'id': str(group.id),
+            'id': six.text_type(group.id),
             'project': group.project.slug,
             'project_name': group.project.name,
-            'logger': group.logger,
-            'level': group.get_level_display(),
+            'logger': event.get_tag('logger'),
+            'level': event.get_tag('level'),
             'culprit': group.culprit,
-            'message': event.message,
+            'message': event.get_legacy_message(),
             'url': group.get_absolute_url(),
         }
         data['event'] = dict(event.data or {})
@@ -80,4 +81,4 @@ class WebHooksPlugin(notify.NotificationPlugin):
     def notify_users(self, group, event, fail_silently=False):
         payload = self.get_group_data(group, event)
         for url in self.get_webhook_urls(group.project):
-            safe_execute(self.send_webhook, url, payload)
+            safe_execute(self.send_webhook, url, payload, _with_transaction=False)

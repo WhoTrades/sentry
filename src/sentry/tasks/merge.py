@@ -8,14 +8,17 @@ sentry.tasks.merge
 
 from __future__ import absolute_import
 
-from celery.utils.log import get_task_logger
+import logging
+
 from django.db import DataError, IntegrityError, router, transaction
 from django.db.models import F
 
 from sentry.tasks.base import instrumented_task, retry
 from sentry.tasks.deletion import delete_group
 
-logger = get_task_logger(__name__)
+# TODO(dcramer): probably should have a new logger for this, but it removes data
+# so lets bundle under deletions
+logger = logging.getLogger('sentry.deletions')
 
 
 @instrumented_task(name='sentry.tasks.merge.merge_group', queue='merge',
@@ -24,29 +27,31 @@ logger = get_task_logger(__name__)
 def merge_group(from_object_id=None, to_object_id=None, **kwargs):
     # TODO(mattrobenolt): Write tests for all of this
     from sentry.models import (
-        Activity, Group, GroupAssignee, GroupHash, GroupRuleStatus, GroupTagKey,
-        GroupTagValue, EventMapping, Event, UserReport
+        Activity, Group, GroupAssignee, GroupHash, GroupRuleStatus,
+        GroupSubscription, GroupTagKey, GroupTagValue, EventMapping, Event,
+        UserReport, GroupRedirect, GroupMeta,
     )
 
     if not (from_object_id and to_object_id):
-        logger.error('merge_group called with missing params')
+        logger.error('merge_group.malformed.missing_params')
         return
 
     try:
         group = Group.objects.get(id=from_object_id)
     except Group.DoesNotExist:
-        logger.warn('merge_group called with invalid from_object_id: %s', from_object_id)
+        logger.warn('merge_group.malformed.invalid_id', extra={'object_id': from_object_id})
         return
 
     try:
         new_group = Group.objects.get(id=to_object_id)
     except Group.DoesNotExist:
-        logger.warn('merge_group called with invalid to_object_id: %s', to_object_id)
+        logger.warn('merge_group.malformed.invalid_id', extra={'object_id': from_object_id})
         return
 
     model_list = (
-        Activity, GroupAssignee, GroupHash, GroupRuleStatus, GroupTagValue,
-        GroupTagKey, EventMapping, Event, UserReport
+        Activity, GroupAssignee, GroupHash, GroupRuleStatus, GroupSubscription,
+        GroupTagValue, GroupTagKey, EventMapping, Event, UserReport,
+        GroupRedirect, GroupMeta,
     )
 
     has_more = merge_objects(model_list, group, new_group, logger=logger)
@@ -58,7 +63,18 @@ def merge_group(from_object_id=None, to_object_id=None, **kwargs):
         )
         return
 
+    previous_group_id = group.id
+
     group.delete()
+
+    try:
+        with transaction.atomic():
+            GroupRedirect.objects.create(
+                group_id=new_group.id,
+                previous_group_id=previous_group_id,
+            )
+    except IntegrityError:
+        pass
 
     new_group.update(
         # TODO(dcramer): ideally these would be SQL clauses
@@ -146,13 +162,18 @@ def _rehash_group_events(group, limit=100):
 
 def merge_objects(models, group, new_group, limit=1000,
                   logger=None):
+    from sentry.models import GroupTagKey, GroupTagValue
 
     has_more = False
     for model in models:
         if logger is not None:
-            logger.info('Merging %r objects where %r into %r', model, group,
-                        new_group)
-        has_group = 'group' in model._meta.get_all_field_names()
+            logger.info('model.merge', extra={
+                'model': model.__name__,
+                'group_id': group.id,
+                'new_group_id': new_group.id
+            })
+        all_fields = model._meta.get_all_field_names()
+        has_group = 'group' in all_fields
         if has_group:
             queryset = model.objects.filter(group=group)
         else:
@@ -172,7 +193,26 @@ def merge_objects(models, group, new_group, limit=1000,
                 delete = True
             else:
                 delete = False
+
             if delete:
+                # Before deleting, we want to merge in counts
+                try:
+                    if model == GroupTagKey:
+                        with transaction.atomic(using=router.db_for_write(model)):
+                            model.objects.filter(
+                                group=new_group,
+                                key=obj.key,
+                            ).update(values_seen=F('values_seen') + obj.values_seen)
+                    elif model == GroupTagValue:
+                        with transaction.atomic(using=router.db_for_write(model)):
+                            model.objects.filter(
+                                group=new_group,
+                                key=obj.key,
+                                value=obj.value,
+                            ).update(times_seen=F('times_seen') + obj.times_seen)
+                except DataError:
+                    # it's possible to hit an out of range value for counters
+                    pass
                 obj.delete()
             has_more = True
 

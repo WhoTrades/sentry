@@ -126,12 +126,24 @@ dl.flat dd {
   text-shadow: none;
 }
 
+/* Icons */
+.icon-star-solid.bookmark,
+.icon-star-outline.bookmark {
+  margin-right: 6px;
+}
+.icon-star-solid.bookmark {
+  color: @yellow-orange;
+  &:hover {
+    color: @yellow-orange;
+  }
+}
+
 /* Button icons */
 
 .btn {
-  .icon-bookmark {
+  .icon-star-solid {
     position: relative;
-    top: 2px;
+    top: 1px;
     margin-right: -1px;
     margin-left: -1px;
   }
@@ -155,12 +167,19 @@ dl.flat dd {
     width: 0;
     margin-right: -6px;
   }
+
+  .icon-signal {
+    font-size: 18px;
+    position: relative;
+    top: 2px;
+  }
 }
 
 /* Small button icons */
 
 .btn-sm {
-  .icon-arrow-down, .icon-arrow-right, .icon-arrow-left {
+  .icon-arrow-down, .icon-arrow-right, .icon-arrow-left, .icon-refresh {
+    position: relative;
     font-size: 14px !important;
     top: 2px;
   }
@@ -261,47 +280,17 @@ dl.flat dd {
 */
 
 table.table {
-  table-layout: auto;
   margin-bottom: 20px;
-  border: 1px solid @trim;
-  border-radius: 3px;
-  border-spacing: 0;
-  border-collapse: separate !important;
-  background: #fff;
 
+  // No overrideable variables available
   td, th {
-    border: 0 !important;
     vertical-align: middle !important;
-    padding: 15px 20px !important;
     line-height: 1 !important;
   }
 
   th {
     font-weight: 600 !important;
-  }
-
-  tr {
-    th:first-child {
-      border-top-left-radius: 4px;
-    }
-    th:last-child {
-      border-top-right-radius: 4px;
-    }
-
-    &:first-child {
-      > td {
-        border-top: 0 !important;
-      }
-    }
-  }
-
-  th {
-    border: none !important;
-    border-bottom: 1px solid @trim !important;
-  }
-
-  td {
-    border-top: 1px solid lighten(@trim, 8) !important;
+    border-width: 1px !important;
   }
 
   .squash {
@@ -335,26 +324,12 @@ table.table {
       .square(36px);
       position: absolute;
       left: 20px;
-      top: 18px;
+      top: 14px;
     }
   }
 
   &.closed {
     display: none;
-  }
-}
-
-thead + tbody {
-  tr:first-child {
-    td {
-      border: 0 !important;
-    }
-  }
-}
-
-.condition-list, .action-list {
-  th, td {
-    vertical-align: middle !important;
   }
 }
 
@@ -383,74 +358,11 @@ pre.plain {
   color: @gray;
 }
 
-table.vars {
-  margin-bottom: 0;
-  border: 0;
-
-  th, td {
-    border: none;
-    padding: 5px 8px;
-    word-break: break-all;
-    border: 1px solid #E9EBEC !important;
-  }
-
-  td .btn, th .btn {
-    white-space: nowrap
-  }
-
-  td.values, td.code {
-    overflow: hidden;
-
-    > pre {
-      background-color: inherit;
-      padding: 0;
-      border: 0;
-      margin-bottom: 0;
+table.table.table-no-top-border {
+  tr:first-child {
+    th, td {
+      border: 0 !important;
     }
-  }
-}
-
-table.table.vars {
-  margin-top: -5px;
-  border-radius: 0;
-
-  tr:first-child > td, tr:first-child > th {
-    border-top: 0 !important;
-  }
-
-  td, th {
-    padding: 12px 0 !important;
-    border: 0;
-    vertical-align: top !important;
-    border: 0 !important;
-    border-top: 1px solid #f1f2f3 !important;
-    border-radius: 0 !important;
-  }
-  td table {
-    border-top: 0;
-    margin-top: -12px;
-    margin-bottom: -10px;
-  }
-  thead th,
-  thead td {
-    background-color: #fff !important;
-  }
-  tbody > tr:nth-child(odd) > td,
-  tbody > tr:nth-child(odd) > th {
-    background-color: #fff;
-  }
-  tbody > tr:nth-child(even) > td,
-  tbody > tr:nth-child(even) > th {
-    background-color: #fff;
-  }
-}
-
-table.vars .toggle-expand {
-  border-top: 0 !important;
-  padding-top: 2px !important;
-
-  .btn {
-    background: rgba(0,0,0, .02);
   }
 }
 
@@ -602,6 +514,71 @@ table.integrations {
   height: 20px;
   vertical-align: middle;
   border-radius: 2px;
+  position: relative;
+  display: inline-block;
+
+    svg, img {
+      position: absolute;
+      top: 0px;
+      left: 0px;
+      border-radius: 3px;
+    }
+}
+
+/**
+* Avatar Cropping
+* ============================================================================
+*/
+
+#avatar-settings {
+  input[type="file"] {
+    display: inline-block;
+    opacity: 0;
+  }
+}
+
+.image-cropper {
+  text-align: center;
+  background-image: url(../images/avatars/cropper-bg.gif);
+  margin-bottom: 20px;
+
+  .crop-container {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+  }
+  .cropper {
+    position: absolute;
+    border: 2px dashed @gray-light;
+    .resizer {
+      border-radius: 5px;
+      width: 10px;
+      height: 10px;
+      position: absolute;
+      background-color: @gray-light;
+    }
+    .resizer.nw {
+      top: -5px;
+      left: -5px;
+    }
+    .resizer.ne {
+      top: -5px;
+      right: -5px;
+    }
+    .resizer.se {
+      bottom: -5px;
+      right: -5px;
+    }
+    .resizer.sw {
+      bottom: -5px;
+      left: -5px;
+    }
+  }
+}
+.canvas-container {
+  canvas {
+    display: none;
+  }
 }
 
 /**
@@ -1446,20 +1423,135 @@ table.integrations {
       border-bottom-right-radius: 3px;
     }
 
-    &:nth-child(1) {
+    &.segment-9 {
+      background-color: rgba(135, 146, 163, 0.1);
+    }
+
+    &.segment-8 {
       background-color: rgba(135, 146, 163, 0.2);
     }
 
-    &:nth-child(2) {
+    &.segment-7 {
+      background-color: rgba(135, 146, 163, 0.3);
+    }
+
+    &.segment-6 {
       background-color: rgba(135, 146, 163, 0.4);
     }
 
-    &:nth-child(3) {
+    &.segment-5 {
+      background-color: rgba(135, 146, 163, 0.5);
+    }
+
+    &.segment-4 {
       background-color: rgba(135, 146, 163, 0.6);
     }
 
-    &:nth-child(4) {
+    &.segment-3 {
+      background-color: rgba(135, 146, 163, 0.7);
+    }
+
+    &.segment-2 {
       background-color: rgba(135, 146, 163, 0.8);
+    }
+
+    &.segment-1 {
+      background-color: rgba(135, 146, 163, 0.9);
+    }
+
+    &.segment-0 {
+      background-color: rgba(135, 146, 163, 1);
+    }
+  }
+}
+
+/**
+* Faces
+* -----
+* A grid of faces for seen-by and participants list
+* ============================================================================
+*/
+
+ul.faces {
+  .list-unstyled;
+  .clearfix;
+
+  li {
+    float: left;
+    margin: 0 5px 5px 0;
+
+    .avatar {
+      .square(28px);
+    }
+  }
+}
+
+/**
+* Key value pill / lozenge
+* ============================================================================
+*/
+
+.pills {
+  .list-unstyled;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+
+  li {
+    white-space: nowrap;
+    margin: 0 15px 15px 0;
+    border-radius: 1px;
+    display: flex;
+    border: 1px solid darken(@trim, 2);
+    border-radius: 3px;
+    box-shadow: 0 1px 2px rgba(0,0,0, .02);
+    line-height: 1.2;
+    max-width: 100%;
+
+    &.true .value {
+      background: #FBFEFA;
+      border: 1px solid #C7DBBD;
+      margin: -1px;
+      color: #6A726C;
+    }
+
+    &.false .value {
+      background: #FFF9F9;
+      border: 1px solid #E5C4C4;
+      margin: -1px;
+      color: #766A6A;
+    }
+
+    &:last-child {
+      margin-right: 0;
+    }
+  }
+
+  .key, .value {
+    padding: 4px 8px;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .value {
+    background: @white-dark;
+    border-left: 1px solid @trim;
+    border-radius: 0 3px 3px 0;
+    font-family: Monaco, monospace;
+    max-width: 100%;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    > a {
+      max-width: 100%;
+      .truncate;
+      display: inline-block;
+      line-height: 1;
+      vertical-align: text-bottom;
+    }
+
+    .external-icon {
+      display: inline;
     }
   }
 }
@@ -1491,7 +1583,6 @@ table.integrations {
     display: inline-block;
     width: 24px;
     height: 24px;
-    border-radius: 4px;
     position: relative;
     left: -2px;
     top: -1px;
@@ -1563,7 +1654,7 @@ table.integrations {
         text-overflow: ellipsis;
         text-align: left;
 
-        img {
+        span.avatar {
           margin-right: 5px;
           position: absolute;
           left: 8px;
@@ -1846,6 +1937,19 @@ table.integrations {
       padding: 10px 10px 0;
     }
   }
+
+  .box-collapse-margins {
+    border-radius: 2px 2px 0 0;
+
+    + .box-collapse-margins {
+      margin-top: -21px;
+      border-radius: 0;
+    }
+
+    &:last-of-type {
+      border-radius: 0 0 2px 2px;
+    }
+  }
 }
 
 /**
@@ -1857,15 +1961,21 @@ table.integrations {
    .alert {
      color: #fff;
      font-weight: bold;
-     background: @yellow-light;
+     background: darken(@yellow-orange, 2);
      border: 0;
 
      .close {
-       color: rgba(255,255,255, .5);
+       color: rgba(255,255,255, .7);
 
        &:hover {
-         color: rgba(255,255,255, .8);
+         color: rgba(255,255,255, .9);
        }
+     }
+   }
+
+   .alert-warning {
+     .icon:before {
+       content: "\e615";
      }
    }
 
@@ -2268,6 +2378,7 @@ table.integrations {
       position: relative;
       top: -4px;
       left: 5px;
+      font-size: 14px;
     }
   }
 
@@ -2399,6 +2510,28 @@ table.integrations {
     line-height: 18px;
     border: 1px solid @gray-lighter;
     background: inherit;
+  }
+}
+
+/**
+* Circle indicators
+* ============================================================================
+*/
+
+.circle-indicator {
+  display: inline-block;
+  .square(14px);
+  border-radius: 14px;
+  margin-right: 8px;
+  position: relative;
+  top: 1px;
+
+  &.enabled {
+    background: @green;
+  }
+
+  &.disabled {
+      background: @red;
   }
 }
 
@@ -2844,12 +2977,22 @@ ul.radio-inputs {
   margin-bottom: 20px;
   border-radius: 3px;
 
+  p {
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
   &.important {
     background: @yellow;
     border: 0;
     a, a:active {
       color: @gray-dark;
     }
+  }
+
+  &.image-well {
+    padding: 80px 30px;
   }
 }
 
@@ -2893,7 +3036,6 @@ ul.radio-inputs {
   padding: 8px;
   color: @tooltip-color;
 }
-
 
 /**
 * Tag List
@@ -3056,6 +3198,14 @@ ul.tag-list {
       color: #fff;
     }
 
+    &.javascript-angular2 .platformicon {
+      background: @blue;
+      color: #fff;
+      &:before {
+        content: "\e900";
+      }
+    }
+
     &.java .platformicon {
       background: @orange;
     }
@@ -3072,7 +3222,8 @@ ul.tag-list {
       background: #90C541;
     }
 
-    &.objc .platformicon {
+    &.objc .platformicon,
+    &.cocoa .platformicon, {
       background: @gray;
       line-height: 54px;
       font-size: 38px;
@@ -3121,6 +3272,25 @@ ul.tag-list {
 }
 
 /**
+* QR Code
+* ============================================================================
+*/
+div.qrcode {
+  table {
+    border-spacing: 0;
+    margin: 40px auto;
+    td {
+      width: 5px;
+      height: 5px;
+
+      &.black {
+        background: black;
+      }
+    }
+  }
+}
+
+/**
  * Error level colors
  * ============================================================================
  */
@@ -3147,6 +3317,28 @@ ul.tag-list {
 }
 
 /**
+ * Truncate component.
+ */
+.truncated {
+  position: relative;
+  .full-value {
+    display: none;
+    position: absolute;
+    background: @white;
+    left: -5px;
+    top: -5px;
+    padding: 4px;
+    border: 1px solid @trim;
+    white-space: nowrap;
+    border-radius: 4px;
+  }
+  &.expanded .full-value {
+    z-index: 10;
+    display: block;
+  }
+}
+
+/**
 * Responsive small screens
 * ============================================================================
 */
@@ -3163,7 +3355,7 @@ ul.tag-list {
 @media (min-width: 768px) {
   .modal-dialog {
     position: absolute;
-    top: 50%;
+    top: 25%;
     left: 50%;
     margin-left: -300px;
     margin-top: -91px;

@@ -10,18 +10,20 @@ from __future__ import absolute_import, print_function
 __all__ = ('Plugin',)
 
 import logging
+import six
 
 from django.core.urlresolvers import reverse
 from django.http import HttpResponseRedirect
 from threading import local
-from hashlib import md5
 
 from sentry.auth import access
+from sentry.plugins.config import PluginConfigMixin
 from sentry.plugins.base.response import Response
 from sentry.plugins.base.view import PluggableViewMixin
 from sentry.plugins.base.configuration import (
     default_plugin_config, default_plugin_options,
 )
+from sentry.utils.hashlib import md5_text
 
 
 class PluginMount(type):
@@ -38,7 +40,7 @@ class PluginMount(type):
         return new_cls
 
 
-class IPlugin(local, PluggableViewMixin):
+class IPlugin(local, PluggableViewMixin, PluginConfigMixin):
     """
     Plugin interface. Should not be inherited from directly.
 
@@ -207,8 +209,8 @@ class IPlugin(local, PluggableViewMixin):
         >>> plugin.get_conf_version(project)
         """
         options = self.get_conf_options(project)
-        return md5(
-            '&'.join(sorted('%s=%s' % o for o in options.iteritems()))
+        return md5_text(
+            '&'.join(sorted('%s=%s' % o for o in six.iteritems(options)))
         ).hexdigest()[:3]
 
     def get_conf_title(self):
@@ -278,7 +280,7 @@ class IPlugin(local, PluggableViewMixin):
 
         >>> def get_resource_links(self):
         >>>     return [
-        >>>         ('Documentation', 'https://docs.getsentry.com'),
+        >>>         ('Documentation', 'https://docs.sentry.io'),
         >>>         ('Bug Tracker', 'https://github.com/getsentry/sentry/issues'),
         >>>         ('Source', 'https://github.com/getsentry/sentry'),
         >>>     ]
@@ -474,7 +476,26 @@ class IPlugin(local, PluggableViewMixin):
     def get_url_module(self):
         """Allows a plugin to return the import path to a URL module."""
 
+    def get_configure_plugin_fields(self, request, project, **kwargs):
+        form = self.project_conf_form
+        if not form:
+            return []
 
+        config = []
+        for name, field in six.iteritems(form.fields):
+            row = self.field_to_config(name, field)
+            row['default'] = self.get_option(name, project)
+            config.append(row)
+        return config
+
+    def view_configure(self, request, project, **kwargs):
+        if request.method == 'GET':
+            return Response(self.get_configure_plugin_fields(request, project, **kwargs))
+        self.configure(project, request.DATA)
+        return Response({'message': 'Successfully updated configuration.'})
+
+
+@six.add_metaclass(PluginMount)
 class Plugin(IPlugin):
     """
     A plugin should be treated as if it were a singleton. The owner does not
@@ -482,4 +503,3 @@ class Plugin(IPlugin):
     it will happen, or happen more than once.
     """
     __version__ = 1
-    __metaclass__ = PluginMount

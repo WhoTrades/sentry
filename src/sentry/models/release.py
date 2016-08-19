@@ -7,6 +7,8 @@ sentry.models.release
 """
 from __future__ import absolute_import, print_function
 
+import re
+
 from django.db import models
 from django.utils import timezone
 from jsonfield import JSONField
@@ -15,7 +17,9 @@ from sentry.db.models import (
     BoundedPositiveIntegerField, FlexibleForeignKey, Model, sane_repr
 )
 from sentry.utils.cache import cache
-from sentry.utils.hashlib import md5
+from sentry.utils.hashlib import md5_text
+
+_sha1_re = re.compile(r'^[a-f0-9]{40}$')
 
 
 class Release(Model):
@@ -48,7 +52,7 @@ class Release(Model):
 
     @classmethod
     def get_cache_key(cls, project_id, version):
-        return 'release:2:%s:%s' % (project_id, md5(version).hexdigest())
+        return 'release:2:%s:%s' % (project_id, md5_text(version).hexdigest())
 
     @classmethod
     def get(cls, project, version):
@@ -91,6 +95,6 @@ class Release(Model):
 
     @property
     def short_version(self):
-        if len(self.version) == 40:
+        if _sha1_re.match(self.version):
             return self.version[:12]
         return self.version

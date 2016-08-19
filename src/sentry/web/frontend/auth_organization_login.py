@@ -5,9 +5,11 @@ from django.conf import settings
 from django.core.urlresolvers import reverse
 from django.db import transaction
 from django.views.decorators.cache import never_cache
+from django.contrib import messages
 
 from sentry import features
 from sentry.auth.helper import AuthHelper
+from sentry.constants import WARN_SESSION_EXPIRED
 from sentry.models import AuthProvider, Organization, OrganizationStatus
 from sentry.utils import auth
 from sentry.web.forms.accounts import AuthenticationForm, RegistrationForm
@@ -43,6 +45,7 @@ class AuthOrganizationLoginView(BaseView):
 
         if can_register and register_form.is_valid():
             user = register_form.save()
+            user.send_confirm_emails(is_new_user=True)
 
             defaults = {
                 'role': 'member',
@@ -80,6 +83,13 @@ class AuthOrganizationLoginView(BaseView):
             if can_register:
                 register_form = self.get_register_form(request)
                 register_form.errors.pop('captcha', None)
+
+        # When the captcha fails, hide any other errors
+        # to prevent brute force attempts.
+        if 'captcha' in login_form.errors:
+            for k in login_form.errors.keys():
+                if k != 'captcha':
+                    login_form.errors.pop(k)
 
         request.session.set_test_cookie()
 
@@ -136,6 +146,16 @@ class AuthOrganizationLoginView(BaseView):
         except AuthProvider.DoesNotExist:
             auth_provider = None
 
+        session_expired = 'session_expired' in request.COOKIES
+        if session_expired:
+            messages.add_message(request, messages.WARNING, WARN_SESSION_EXPIRED)
+
         if not auth_provider:
-            return self.handle_basic_auth(request, organization)
-        return self.handle_sso(request, organization, auth_provider)
+            response = self.handle_basic_auth(request, organization)
+        else:
+            response = self.handle_sso(request, organization, auth_provider)
+
+        if session_expired:
+            response.delete_cookie('session_expired')
+
+        return response

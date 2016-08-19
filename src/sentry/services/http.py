@@ -8,23 +8,25 @@ sentry.services.http
 from __future__ import absolute_import, print_function
 
 import os
+import six
 import sys
+
 from sentry.services.base import Service
 
 
 def convert_options_to_env(options):
-    for k, v in options.iteritems():
+    for k, v in six.iteritems(options):
         if v is None:
             continue
         key = 'UWSGI_' + k.upper().replace('-', '_')
-        if isinstance(v, basestring):
+        if isinstance(v, six.string_types):
             value = v
         elif v is True:
             value = 'true'
         elif v is False:
             value = 'false'
-        elif isinstance(v, (int, long)):
-            value = str(v)
+        elif isinstance(v, six.integer_types):
+            value = six.text_type(v)
         else:
             raise TypeError('Unknown option type: %r (%s)' % (k, type(v)))
         yield key, value
@@ -34,8 +36,10 @@ class SentryHTTPServer(Service):
     name = 'http'
 
     def __init__(self, host=None, port=None, debug=False, workers=None,
-                 validate=True):
+                 validate=True, extra_options=None):
         from django.conf import settings
+        from sentry import options as sentry_options
+        from sentry.logging import LoggingFormat
 
         if validate:
             self.validate_settings()
@@ -44,6 +48,9 @@ class SentryHTTPServer(Service):
         port = port or settings.SENTRY_WEB_PORT
 
         options = (settings.SENTRY_WEB_OPTIONS or {}).copy()
+        if extra_options is not None:
+            for k, v in six.iteritems(extra_options):
+                options[k] = v
         options.setdefault('module', 'sentry.wsgi:application')
         options.setdefault('protocol', 'http')
         options.setdefault('auto-procname', True)
@@ -108,6 +115,15 @@ class SentryHTTPServer(Service):
         if 'loglevel' in options:
             del options['loglevel']
 
+        # For machine logging, we are choosing to 100% disable logging
+        # from uwsgi since it's currently not possible to get a nice json
+        # logging out of uwsgi, so it's better to just opt out. There's
+        # also an assumption that anyone operating at the scale of needing
+        # machine formatted logs, they are also using nginx in front which
+        # has it's own logs that can be formatted correctly.
+        if sentry_options.get('system.logging-format') == LoggingFormat.MACHINE:
+            options['disable-logging'] = True
+
         self.options = options
 
     def validate_settings(self):
@@ -116,13 +132,19 @@ class SentryHTTPServer(Service):
 
         validate_settings(django_settings)
 
-    def run(self):
+    def prepare_environment(self, env=None):
+        if env is None:
+            env = os.environ
+
         # Move all of the options into UWSGI_ env vars
         for k, v in convert_options_to_env(self.options):
-            os.environ.setdefault(k, v)
+            env.setdefault(k, v)
+
+        # Signal that we're running within uwsgi
+        env['SENTRY_RUNNING_UWSGI'] = '1'
 
         # This has already been validated inside __init__
-        os.environ['SENTRY_SKIP_BACKEND_VALIDATION'] = '1'
+        env['SENTRY_SKIP_BACKEND_VALIDATION'] = '1'
 
         # Look up the bin directory where `sentry` exists, which should be
         # sys.argv[0], then inject that to the front of our PATH so we can reliably
@@ -130,8 +152,10 @@ class SentryHTTPServer(Service):
         # This is so the virtualenv doesn't need to be sourced in, which effectively
         # does exactly this.
         virtualenv_path = os.path.dirname(os.path.abspath(sys.argv[0]))
-        current_path = os.environ.get('PATH', '')
+        current_path = env.get('PATH', '')
         if virtualenv_path not in current_path:
-            os.environ['PATH'] = '%s:%s' % (virtualenv_path, current_path)
+            env['PATH'] = '%s:%s' % (virtualenv_path, current_path)
 
+    def run(self):
+        self.prepare_environment()
         os.execvp('uwsgi', ('uwsgi',))

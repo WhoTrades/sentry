@@ -41,6 +41,7 @@ MATCH_CHOICES = OrderedDict([
 ATTR_CHOICES = [
     'message',
     'platform',
+    'environment',
     'exception.type',
     'exception.value',
     'user.id',
@@ -92,7 +93,7 @@ class EventAttributeCondition(EventCondition):
     # TODO(dcramer): add support for stacktrace.vars.[name]
 
     form_cls = EventAttributeForm
-    label = 'An events {attribute} value {match} {value}'
+    label = u'An event\'s {attribute} value {match} {value}'
 
     def _get_attribute_values(self, event, attr):
         # TODO(dcramer): we should validate attributes (when we can) before
@@ -103,6 +104,9 @@ class EventAttributeCondition(EventCondition):
             if len(path) != 1:
                 return []
             return [getattr(event, path[0])]
+
+        elif path[0] == 'environment':
+            return [event.get_tag('environment')]
 
         elif len(path) == 1:
             return []
@@ -157,6 +161,7 @@ class EventAttributeCondition(EventCondition):
                 stacks = [
                     e.stacktrace
                     for e in event.interfaces['sentry.interfaces.Exception'].values
+                    if e.stacktrace
                 ]
 
             result = []

@@ -1,6 +1,4 @@
 import React from 'react';
-import ReactDOM from 'react-dom';
-import TestUtils from 'react-addons-test-utils';
 import {shallow, mount} from 'enzyme';
 
 import {Client} from 'app/api';
@@ -114,19 +112,15 @@ describe('SearchBar', function() {
   describe('onKeyUp()', function () {
     describe('escape', function () {
       it('blurs the input', function () {
-        // needs to be rendered into document.body or cannot query document.activeElement
-        let searchBar = ReactDOM.render(<SearchBar orgId="123" projectId="456"/>, document.body);
-        searchBar.state.dropdownVisible = true;
+        let wrapper = shallow(<SearchBar orgId="123" projectId="456"/>);
+        wrapper.setState({dropdownVisible: true});
 
-        let input = ReactDOM.findDOMNode(searchBar.refs.searchInput);
+        let instance = wrapper.instance();
+        this.sandbox.stub(instance, 'blur');
 
-        input.focus();
+        wrapper.find('input').simulate('keyup', {key: 'Escape', keyCode: '27'});
 
-        expect(document.activeElement).to.eql(input);
-
-        TestUtils.Simulate.keyUp(input, {key: 'Escape', keyCode: '27'});
-
-        expect(document.activeElement).to.not.eql(input);
+        expect(instance.blur.calledOnce).to.be.ok;
       });
     });
   });
@@ -222,10 +216,8 @@ describe('SearchBar', function() {
       };
       let searchBar = mount(<SearchBar {...props} />).instance();
       searchBar.updateAutoCompleteItems();
-      expect(searchBar.state.searchTerm).to.eql('unresolved');
-      expect(searchBar.state.searchItems.length).to.eql(1);
-      expect(searchBar.state.searchItems[0].desc).to.eql('unresolved');
-      expect(searchBar.state.searchItems[0].value).to.eql('unresolved');
+      expect(searchBar.state.searchTerm).to.eql('fu');
+      expect(searchBar.state.searchItems.length).to.eql(0);
       expect(searchBar.state.activeSearchItem).to.eql(0);
     });
 

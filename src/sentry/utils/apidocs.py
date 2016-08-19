@@ -8,20 +8,21 @@ import inspect
 import requests
 import mimetypes
 
-from StringIO import StringIO
-from pytz import utc
-from datetime import datetime, timedelta
-from random import randint
 from contextlib import contextmanager
-
+from datetime import datetime, timedelta
 from django.conf import settings
+from pytz import utc
+from random import randint
+from six import StringIO
 
 # Do not import from sentry here!  Bad things will happen
 
 
-optional_group_matcher = re.compile(r'\(\?\:(.+)\)')
+optional_group_matcher = re.compile(r'\(\?\:([^\)]+)\)')
 named_group_matcher = re.compile(r'\(\?P<(\w+)>[^\)]+\)')
-non_named_group_matcher = re.compile(r'\(.*?\)')
+non_named_group_matcher = re.compile(r'\([^\)]+\)')
+# [foo|bar|baz]
+either_option_matcher = re.compile(r'\[([^\]]+)\|([^\]]+)\]')
 camel_re = re.compile(r'([A-Z]+)([a-z])')
 
 
@@ -44,6 +45,9 @@ def simplify_regex(pattern):
 
     # handle non-named groups
     pattern = non_named_group_matcher.sub("{var}", pattern)
+
+    # handle optional params
+    pattern = either_option_matcher.sub(lambda m: m.group(1), pattern)
 
     # clean up any outstanding regex-y characters.
     pattern = pattern.replace('^', '').replace('$', '') \
@@ -199,7 +203,7 @@ def create_sample_time_series(event):
 
     now = datetime.utcnow().replace(tzinfo=utc)
 
-    for _ in xrange(60):
+    for _ in range(60):
         count = randint(1, 10)
         tsdb.incr_multi((
             (tsdb.models.project, group.project.id),
@@ -217,7 +221,7 @@ def create_sample_time_series(event):
         ), now, int(count * 0.1))
         now = now - timedelta(seconds=1)
 
-    for _ in xrange(24 * 30):
+    for _ in range(24 * 30):
         count = randint(100, 1000)
         tsdb.incr_multi((
             (tsdb.models.project, group.project.id),
@@ -290,16 +294,13 @@ class MockUtils(object):
             },
         )[0]
 
-    def create_project(self, name, team, org, short_id=None):
+    def create_project(self, name, team, org):
         from sentry.models import Project
-        if short_id is None:
-            short_id = name.upper()[:2]
         return Project.objects.get_or_create(
             team=team,
             name=name,
             defaults={
                 'organization': org,
-                'short_id': short_id,
             }
         )[0]
 

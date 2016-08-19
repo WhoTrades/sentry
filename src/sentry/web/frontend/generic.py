@@ -29,9 +29,9 @@ def resolve(path):
     normalized_path = posixpath.normpath(unquote(path)).lstrip('/')
     absolute_path = finders.find(normalized_path)
     if not absolute_path:
-        if path.endswith('/') or path == '':
-            raise Http404("Directory indexes are not allowed here.")
         raise Http404("'%s' could not be found" % path)
+    if path[-1] == '/' or os.path.isdir(absolute_path):
+        raise Http404('Directory indexes are not allowed here.')
     return os.path.split(absolute_path)
 
 
@@ -51,9 +51,9 @@ def static_media(request, **kwargs):
     except Http404:
         # Return back a simpler plain-text 404 response, more suitable
         # for static files, rather than our full blown HTML.
-        return HttpResponseNotFound('File not found.\n', content_type='text/plain')
+        return HttpResponseNotFound('', content_type='text/plain')
 
-    if 'gzip' in request.META.get('HTTP_ACCEPT_ENCODING', '') and not path.endswith('.gz'):
+    if 'gzip' in request.META.get('HTTP_ACCEPT_ENCODING', '') and not path.endswith('.gz') and not settings.DEBUG:
         paths = (path + '.gz', path)
     else:
         paths = (path,)

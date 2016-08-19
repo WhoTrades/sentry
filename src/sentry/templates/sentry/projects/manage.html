@@ -39,9 +39,6 @@
       <div class="box-content with-padding">
         {{ form.name|as_crispy_field }}
         {{ form.slug|as_crispy_field }}
-        {% feature organizations:callsigns project.organization %}
-          {{ form.callsign|as_crispy_field }}
-        {% endfeature %}
         {{ form.team|as_crispy_field }}
       </div>
     </div>
@@ -51,7 +48,9 @@
         <h3>{% trans "Event Settings" %}</h3>
       </div>
       <div class="box-content with-padding">
+        {{ form.default_environment|as_crispy_field }}
         {{ form.resolve_age|as_crispy_field }}
+        <p><small><strong>Note: Enabling auto resolve will immediately resolve anything that has not been seen within this period of time. There is no undo!</strong></small></p>
         {{ form.scrub_data|as_crispy_field }}
         {{ form.scrub_defaults|as_crispy_field }}
         {{ form.sensitive_fields|as_crispy_field }}
@@ -169,7 +168,7 @@
   <h6 class="nav-header">{% trans "Configuration" %}</h6>
   <ul class="nav nav-stacked">
     <li{% if page == 'details' %} class="active"{% endif %}>
-        <a href="{% url 'sentry-manage-project' project.organization.slug project.slug %}">{% trans "Project Settings" %}</a>
+        <a href="{% url 'sentry-manage-project' project.organization.slug project.slug %}">{% trans "General" %}</a>
     </li>
     <li{% if page == 'notifications' %} class="active"{% endif %}>
         <a href="{% url 'sentry-project-notifications' project.organization.slug project.slug %}">{% trans "Notifications" %}</a>
@@ -194,21 +193,22 @@
     <li>
         <a href="{% absolute_uri '/{}/{}/settings/saved-searches/' project.organization.slug project.slug %}">{% trans "Saved Searches" %}</a>
     </li>
-    {% feature projects:dsym project %}
     <li>
         <a href="{% absolute_uri '/{}/{}/settings/debug-symbols/' project.organization.slug project.slug %}">{% trans "Debug Symbols" %}</a>
     </li>
-    {% endfeature %}
-    {% feature projects:user-reports project %}
-    <li>
-        <a href="{% absolute_uri '/{}/{}/settings/user-reports/' project.organization.slug project.slug %}">{% trans "User Reports" %}</a>
-    </li>
-    {% endfeature %}
   </ul>
-  <h6 class="nav-header">{% trans "Setup" %}</h6>
+  <h6 class="nav-header">{% trans "Data" %}</h6>
   <ul class="nav nav-stacked">
     <li>
-        <a href="{% absolute_uri '/{}/{}/settings/install/' project.organization.slug project.slug %}">{% trans "Instructions" %}</a>
+        <a href="{% absolute_uri '/{}/{}/settings/install/' project.organization.slug project.slug %}">{% trans "Error Tracking" %}</a>
+    </li>
+    {% if organization.flags.early_adopter %}
+    <li>
+        <a href="{% absolute_uri '/{}/{}/settings/csp/' project.organization.slug project.slug %}">{% trans "CSP Reports" %}</a>
+    </li>
+    {% endif %}
+    <li>
+        <a href="{% absolute_uri '/{}/{}/settings/user-feedback/' project.organization.slug project.slug %}">{% trans "User Feedback" %}</a>
     </li>
     <li{% if page == 'keys' %} class="active"{% endif %}>
         <a href="{% url 'sentry-manage-project-keys' project.organization.slug project.slug %}">{% trans "Client Keys (DSN)" %}</a>

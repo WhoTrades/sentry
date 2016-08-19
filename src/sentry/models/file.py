@@ -8,20 +8,25 @@ sentry.models.file
 
 from __future__ import absolute_import
 
+import six
+
+from hashlib import sha1
+from uuid import uuid4
+
 from django.conf import settings
-from django.core.files.base import ContentFile, File as FileObj
+from django.core.files.base import File as FileObj
+from django.core.files.base import ContentFile
 from django.core.files.storage import get_storage_class
 from django.db import models
 from django.utils import timezone
-from hashlib import sha1
 from jsonfield import JSONField
-from uuid import uuid4
 
+from sentry.app import locks
 from sentry.db.models import (
     BoundedPositiveIntegerField, FlexibleForeignKey, Model
 )
 from sentry.utils import metrics
-from sentry.utils.cache import Lock
+from sentry.utils.retries import TimedRetryPolicy
 
 ONE_DAY = 60 * 60 * 24
 
@@ -51,16 +56,16 @@ class FileBlob(Model):
         """
         size = 0
 
-        checksum = sha1('')
+        checksum = sha1(b'')
         for chunk in fileobj:
             size += len(chunk)
             checksum.update(chunk)
         checksum = checksum.hexdigest()
 
-        lock_key = 'fileblob:upload:{}'.format(checksum)
         # TODO(dcramer): the database here is safe, but if this lock expires
         # and duplicate files are uploaded then we need to prune one
-        with Lock(lock_key, timeout=600):
+        lock = locks.get('fileblob:upload:{}'.format(checksum), duration=60 * 10)
+        with TimedRetryPolicy(60)(lock.acquire):
             # test for presence
             try:
                 existing = FileBlob.objects.get(checksum=checksum)
@@ -85,13 +90,16 @@ class FileBlob(Model):
 
     @classmethod
     def generate_unique_path(cls, timestamp):
-        pieces = map(str, divmod(int(timestamp.strftime('%s')), ONE_DAY))
-        pieces.append('%s' % (uuid4().hex,))
-        return '/'.join(pieces)
+        pieces = [
+            six.text_type(x)
+            for x in divmod(int(timestamp.strftime('%s')), ONE_DAY)
+        ]
+        pieces.append(uuid4().hex)
+        return u'/'.join(pieces)
 
     def delete(self, *args, **kwargs):
-        lock_key = 'fileblob:upload:{}'.format(self.checksum)
-        with Lock(lock_key, timeout=600):
+        lock = locks.get('fileblob:upload:{}'.format(self.checksum), duration=60 * 10)
+        with TimedRetryPolicy(60)(lock.acquire):
             if self.path:
                 self.deletefile(commit=False)
             super(FileBlob, self).delete(*args, **kwargs)
@@ -149,19 +157,13 @@ class File(Model):
         app_label = 'sentry'
         db_table = 'sentry_file'
 
-    def delete(self, *args, **kwargs):
-        super(File, self).delete(*args, **kwargs)
-        # TODO(dcramer): let's move blob cleanup to the 'cleanup' script as its
-        # more complex now with M2M relations
-        if self.blob and not File.objects.filter(blob=self.blob).exists():
-            self.blob.delete()
-
     def getfile(self, *args, **kwargs):
-        if self.blob:
-            return self.blob.getfile()
-        return FileObj(ChunkedFileBlobIndexWrapper(FileBlobIndex.objects.filter(
-            file=self,
-        ).select_related('blob').order_by('offset')), 'rb')
+        return FileObj(ChunkedFileBlobIndexWrapper(
+            FileBlobIndex.objects.filter(
+                file=self,
+            ).select_related('blob').order_by('offset'),
+            mode=kwargs.get('mode'),
+        ), self.name)
 
     def putfile(self, fileobj, blob_size=DEFAULT_BLOB_SIZE, commit=True):
         """
@@ -173,7 +175,7 @@ class File(Model):
         """
         results = []
         offset = 0
-        checksum = sha1('')
+        checksum = sha1(b'')
 
         while True:
             contents = fileobj.read(blob_size)
@@ -214,11 +216,12 @@ class FileBlobIndex(Model):
 
 
 class ChunkedFileBlobIndexWrapper(object):
-    def __init__(self, indexes):
+    def __init__(self, indexes, mode=None):
         # eager load from database incase its a queryset
         self._indexes = list(indexes)
         self._curfile = None
         self._curidx = None
+        self.mode = mode
         self.open()
 
     def __enter__(self):
@@ -229,7 +232,7 @@ class ChunkedFileBlobIndexWrapper(object):
 
     def _nextidx(self):
         try:
-            self._curidx = self._idxiter.next()
+            self._curidx = six.next(self._idxiter)
             self._curfile = self._curidx.blob.getfile()
         except StopIteration:
             self._curidx = None
@@ -252,7 +255,9 @@ class ChunkedFileBlobIndexWrapper(object):
 
     def seek(self, pos):
         if self.closed:
-            raise IOError('Cannot seek on a closed file')
+            raise ValueError('I/O operation on closed file')
+        if pos < 0:
+            raise IOError('Invalid argument')
         for n, idx in enumerate(self._indexes[::-1]):
             if idx.offset <= pos:
                 if idx != self._curidx:
@@ -260,12 +265,17 @@ class ChunkedFileBlobIndexWrapper(object):
                     self._nextidx()
                 break
         else:
-            raise Exception('Cannot seek to pos')
+            raise ValueError('Cannot seek to pos')
         self._curfile.seek(pos - self._curidx.offset)
+
+    def tell(self):
+        if self.closed:
+            raise ValueError('I/O operation on closed file')
+        return self._curidx.offset + self._curfile.tell()
 
     def read(self, bytes=4096):
         if self.closed:
-            raise IOError('Cannot read on a closed file')
+            raise ValueError('I/O operation on closed file')
         result = ''
         while bytes and self._curfile is not None:
             blob_result = self._curfile.read(bytes)

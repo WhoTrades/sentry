@@ -9,9 +9,9 @@ import GroupChart from './groupChart';
 import GroupCheckBox from './groupCheckBox';
 import ProjectState from '../../mixins/projectState';
 import TimeSince from '../timeSince';
+import GroupTitle from '../group/title';
 import GroupStore from '../../stores/groupStore';
 import SelectedGroupStore from '../../stores/selectedGroupStore';
-import OrganizationState from '../../mixins/organizationState';
 import ShortId from '../shortId';
 
 import {valueIsEqual} from '../../utils';
@@ -21,45 +21,10 @@ const StreamGroupHeader = React.createClass({
     data: React.PropTypes.object.isRequired,
     orgId: React.PropTypes.string.isRequired,
     projectId: React.PropTypes.string.isRequired,
-    hasEventTypes: React.PropTypes.bool,
-  },
-  mixins: [OrganizationState],
-
-  getTitle() {
-    let data = this.props.data;
-    if (!this.props.hasEventTypes) {
-      return <span>{data.title}</span>;
-    }
-
-    let metadata = data.metadata;
-    switch (data.type) {
-      case 'error':
-        return (
-          <span>
-            <span style={{marginRight: 10}}>{metadata.type}</span>
-            <em style={{fontSize: '80%', color: '#6F7E94', fontWeight: 'normal'}}>{data.culprit}</em><br/>
-          </span>
-        );
-      case 'csp':
-        return (
-          <span>
-            <span style={{marginRight: 10}}>{metadata.directive}</span>
-            <em style={{fontSize: '80%', color: '#6F7E94', fontWeight: 'normal'}}>{metadata.uri}</em><br/>
-          </span>
-        );
-      case 'default':
-        return <span>{metadata.title}</span>;
-      default:
-        return <span>{data.title}</span>;
-    }
   },
 
   getMessage() {
     let data = this.props.data;
-    if (!this.props.hasEventTypes) {
-      return <span>{data.culprit}</span>;
-    }
-
     let metadata = data.metadata;
     switch (data.type) {
       case 'error':
@@ -67,29 +32,28 @@ const StreamGroupHeader = React.createClass({
       case 'csp':
         return metadata.message;
       default:
-        return '';
+        return this.props.data.culprit || '';
     }
   },
 
   render() {
     let {orgId, projectId, data} = this.props;
+    let message = this.getMessage();
     return (
       <div>
         <h3 className="truncate">
           <Link to={`/${orgId}/${projectId}/issues/${data.id}/`}>
-            {this.props.hasEventTypes ?
-              <span className="event-type truncate">{data.type}</span>
-            :
-              <span className="error-level truncate">{data.level}</span>
-            }
-            <span className="icon icon-soundoff"></span>
-            <span className="icon icon-bookmark"></span>
-            {this.getTitle()}
+            <span className="error-level truncate">{data.level}</span>
+            <span className="icon icon-soundoff" />
+            <span className="icon icon-star-solid" />
+            <GroupTitle data={data} />
           </Link>
         </h3>
-        <div className="event-message truncate">
-          <span className="message">{this.getMessage()}</span>
-        </div>
+        {message &&
+          <div className="event-message truncate">
+            <span className="message">{this.getMessage()}</span>
+          </div>
+        }
       </div>
     );
   }
@@ -166,7 +130,6 @@ const StreamGroup = React.createClass({
   render() {
     let data = this.state.data;
     let userCount = data.userCount;
-    let features = this.getProjectFeatures();
 
     let className = 'group row';
     if (data.isBookmarked) {
@@ -198,11 +161,10 @@ const StreamGroup = React.createClass({
           <StreamGroupHeader
             orgId={orgId}
             projectId={projectId}
-            data={data}
-            hasEventTypes={features.has('event-types')} />
+            data={data} />
           <div className="event-extra">
             <ul>
-              {data.shortId &&
+              {this.getFeatures().has('callsigns') && data.shortId &&
                 <li>
                   <ShortId shortId={data.shortId} />
                 </li>

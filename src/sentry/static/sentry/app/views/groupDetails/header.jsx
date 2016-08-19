@@ -9,6 +9,7 @@ import GroupSeenBy from './seenBy';
 import IndicatorStore from '../../stores/indicatorStore';
 import ListLink from '../../components/listLink';
 import ShortId from '../../components/shortId';
+import GroupTitle from '../../components/group/title';
 import ProjectState from '../../mixins/projectState';
 import {t} from '../../locale';
 
@@ -73,41 +74,8 @@ const GroupHeader = React.createClass({
     });
   },
 
-  getTitle(hasEventTypes) {
+  getMessage() {
     let data = this.props.group;
-    if (!hasEventTypes) {
-      return <span>{data.title}</span>;
-    }
-
-    let metadata = data.metadata;
-    switch (data.type) {
-      case 'error':
-        return (
-          <span>
-            <span style={{marginRight: 10}}>{metadata.type}</span>
-            <em style={{fontSize: '80%', color: '#6F7E94', fontWeight: 'normal'}}>{data.culprit}</em><br/>
-          </span>
-        );
-      case 'csp':
-        return (
-          <span>
-            <span style={{marginRight: 10}}>{metadata.directive}</span>
-            <em style={{fontSize: '80%', color: '#6F7E94', fontWeight: 'normal'}}>{metadata.uri}</em><br/>
-          </span>
-        );
-      case 'default':
-        return <span>{metadata.title}</span>;
-      default:
-        return <span>{data.title}</span>;
-    }
-  },
-
-  getMessage(hasEventTypes) {
-    let data = this.props.group;
-    if (!hasEventTypes) {
-      return <span>{data.culprit}</span>;
-    }
-
     let metadata = data.metadata;
     switch (data.type) {
       case 'error':
@@ -115,15 +83,14 @@ const GroupHeader = React.createClass({
       case 'csp':
         return metadata.message;
       default:
-        return '';
+        return this.props.group.culprit || '';
     }
   },
 
   render() {
     let group = this.props.group,
         orgFeatures = new Set(this.getOrganization().features),
-        userCount = group.userCount,
-        features = this.getProjectFeatures();
+        userCount = group.userCount;
 
     let className = 'group-detail';
 
@@ -142,26 +109,25 @@ const GroupHeader = React.createClass({
 
     let groupId = group.id,
       projectId = this.getProject().slug,
-      orgId = this.getOrganization().slug,
-      hasEventTypes = this.getProjectFeatures().has('event-types');
+      orgId = this.getOrganization().slug;
+
+    let message = this.getMessage();
 
     return (
       <div className={className}>
         <div className="row">
           <div className="col-sm-8">
             <h3>
-              {this.getTitle(hasEventTypes)}
+              <GroupTitle data={group} />
             </h3>
             <div className="event-message">
-              {hasEventTypes ?
-                <span className="event-type">{group.type}</span>
-              :
-                <span className="error-level">{group.level}</span>
-              }
+              <span className="error-level">{group.level}</span>
               {group.shortId &&
                 <ShortId shortId={group.shortId} />
               }
-              <span className="message">{this.getMessage(hasEventTypes)}</span>
+              {message &&
+                <span className="message">{message}</span>
+              }
               {group.logger &&
                 <span className="event-annotation">
                   <Link to={`/${orgId}/${projectId}/`} query={{query: 'logger:' + group.logger}}>
@@ -196,7 +162,7 @@ const GroupHeader = React.createClass({
                     <Count className="count" value={userCount} />
                   </Link>
                 :
-                  0
+                  <span>0</span>
                 }
               </div>
             </div>
@@ -226,11 +192,9 @@ const GroupHeader = React.createClass({
           <ListLink to={`/${orgId}/${projectId}/issues/${groupId}/activity/`}>
             {t('Comments')} <span className="badge animated">{group.numComments}</span>
           </ListLink>
-          {features.has('user-reports') &&
-            <ListLink to={`/${orgId}/${projectId}/issues/${groupId}/reports/`}>
-              {t('User Reports')} <span className="badge animated">{group.userReportCount}</span>
-            </ListLink>
-          }
+          <ListLink to={`/${orgId}/${projectId}/issues/${groupId}/feedback/`}>
+            {t('User Feedback')} <span className="badge animated">{group.userReportCount}</span>
+          </ListLink>
           <ListLink to={`/${orgId}/${projectId}/issues/${groupId}/tags/`}>
             {t('Tags')}
           </ListLink>

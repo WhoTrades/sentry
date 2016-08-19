@@ -26,12 +26,14 @@ class OptionsTypesTest(TestCase):
         assert Bool('t') is True
         assert Bool('true') is True
         assert Bool('1') is True
+        assert Bool('on') is True
         assert Bool(False) is False
         assert Bool('n') is False
         assert Bool('NO') is False
         assert Bool('f') is False
         assert Bool('false') is False
         assert Bool('0') is False
+        assert Bool('off') is False
         assert Bool() is False
         assert Bool.test(None) is False
         assert Bool(True) is True
@@ -82,8 +84,9 @@ class OptionsTypesTest(TestCase):
 
     def test_sequence(self):
         assert Sequence(()) == ()
-        assert Sequence([]) == ()
+        assert Sequence([]) == []
         assert Sequence((1, 2, 3)) == (1, 2, 3)
+        assert Sequence([1, 2, 3]) == [1, 2, 3]
         assert Sequence('[1,2,3]') == (1, 2, 3)
         with self.assertRaises(InvalidTypeError):
             Sequence('{}')

@@ -69,6 +69,10 @@ class SensitiveDataFilter(object):
                 if exc.get('stacktrace'):
                     self.filter_stacktrace(exc['stacktrace'])
 
+        if 'sentry.interfaces.Breadcrumbs' in data:
+            for crumb in data['sentry.interfaces.Breadcrumbs'].get('values') or ():
+                self.filter_crumb(crumb)
+
         if 'sentry.interfaces.Http' in data:
             self.filter_http(data['sentry.interfaces.Http'])
 
@@ -95,7 +99,7 @@ class SensitiveDataFilter(object):
             key = ''
 
         original_value = value
-        if isinstance(value, basestring):
+        if isinstance(value, six.string_types):
             value = value.lower()
         else:
             value = ''
@@ -132,3 +136,9 @@ class SensitiveDataFilter(object):
                 data[n] = '&'.join('='.join(k) for k in querybits)
             else:
                 data[n] = varmap(self.sanitize, data[n])
+
+    def filter_crumb(self, data):
+        for key in 'data', 'message':
+            val = data.get(key)
+            if val:
+                data[key] = varmap(self.sanitize, val)

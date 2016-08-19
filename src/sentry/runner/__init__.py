@@ -11,7 +11,13 @@ import os
 import click
 import sys
 import sentry
+import datetime
 from sentry.utils.imports import import_string
+
+
+# We need to run this here because of a concurrency bug in Python's locale
+# with the lazy initialization.
+datetime.datetime.strptime('', '')
 
 # Parse out a pretty version for use with --version
 if sentry.__build__ is None:
@@ -45,21 +51,27 @@ def cli(ctx, config):
 
 
 # TODO(mattrobenolt): Autodiscover commands?
-map(lambda cmd: cli.add_command(import_string(cmd)), (
+list(map(lambda cmd: cli.add_command(import_string(cmd)), (
+    'sentry.runner.commands.backup.export',
+    'sentry.runner.commands.backup.import_',
     'sentry.runner.commands.cleanup.cleanup',
     'sentry.runner.commands.config.config',
     'sentry.runner.commands.createuser.createuser',
+    'sentry.runner.commands.devserver.devserver',
     'sentry.runner.commands.django.django',
-    'sentry.runner.commands.backup.export',
+    'sentry.runner.commands.exec.exec_',
+    'sentry.runner.commands.files.files',
     'sentry.runner.commands.help.help',
-    'sentry.runner.commands.backup.import_',
     'sentry.runner.commands.init.init',
     'sentry.runner.commands.plugins.plugins',
     'sentry.runner.commands.queues.queues',
     'sentry.runner.commands.repair.repair',
+    'sentry.runner.commands.run.run',
     'sentry.runner.commands.start.start',
+    'sentry.runner.commands.tsdb.tsdb',
     'sentry.runner.commands.upgrade.upgrade',
-))
+    'sentry.runner.commands.dsym.dsym',
+)))
 
 
 def make_django_command(name, django_command=None, help=None):
@@ -84,11 +96,10 @@ def make_django_command(name, django_command=None, help=None):
     return inner
 
 
-map(cli.add_command, (
-    make_django_command('devserver', 'runserver', help='Start a light Web server for development.'),
+list(map(cli.add_command, (
     make_django_command('shell', help='Run a Python interactive interpreter.'),
-    make_django_command('celery', help='Start background workers.'),
-))
+    make_django_command('celery', help='DEPRECATED see `sentry run` instead.'),
+)))
 
 
 def configure():

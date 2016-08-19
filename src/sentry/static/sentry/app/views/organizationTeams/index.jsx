@@ -1,26 +1,23 @@
 import React from 'react';
 import Reflux from 'reflux';
-import {Link} from 'react-router';
 
 import {t} from '../../locale';
 import ApiMixin from '../../mixins/apiMixin';
+import ListLink from '../../components/listLink';
 import OrganizationHomeContainer from '../../components/organizations/homeContainer';
 import OrganizationState from '../../mixins/organizationState';
 import TeamStore from '../../stores/teamStore';
-import TooltipMixin from '../../mixins/tooltip';
 import {sortArray} from '../../utils';
 
 import ExpandedTeamList from './expandedTeamList';
 import OrganizationStatOverview from './organizationStatOverview';
+import {loadStats} from '../../actionCreators/projects';
 
 const OrganizationTeams = React.createClass({
   mixins: [
     ApiMixin,
     OrganizationState,
-    Reflux.listenTo(TeamStore, 'onTeamListChange'),
-    TooltipMixin({
-      selector: '.tip'
-    })
+    Reflux.listenTo(TeamStore, 'onTeamListChange')
   ],
 
   getInitialState() {
@@ -36,25 +33,15 @@ const OrganizationTeams = React.createClass({
     this.fetchStats();
   },
 
-  // TODO(dcramer): handle updating project stats when items change
   fetchStats() {
-    this.api.request(this.getOrganizationStatsEndpoint(), {
+    loadStats(this.api, {
+      orgId: this.props.params.orgId,
       query: {
         since: new Date().getTime() / 1000 - 3600 * 24,
         stat: 'generated',
         group: 'project'
-      },
-      success: (data) => {
-        this.setState({
-          projectStats: data
-        });
       }
     });
-  },
-
-  getOrganizationStatsEndpoint() {
-    let params = this.props.params;
-    return '/organizations/' + params.orgId + '/stats/';
   },
 
   onTeamListChange() {
@@ -65,8 +52,6 @@ const OrganizationTeams = React.createClass({
         return o.name;
       })
     });
-
-    this.fetchStats();
   },
 
   render() {
@@ -77,8 +62,6 @@ const OrganizationTeams = React.createClass({
     let features = this.getFeatures();
     let org = this.getOrganization();
 
-    let activeNav = /^\/[^\/]+\/$/.test(this.props.location.pathname) ?
-      'your-teams' : 'all-teams';
     let allTeams = this.state.teamList;
     let activeTeams = this.state.teamList.filter((team) => team.isMember);
 
@@ -88,12 +71,8 @@ const OrganizationTeams = React.createClass({
           <div className="col-md-9">
             <div className="team-list">
               <ul className="nav nav-tabs border-bottom">
-                <li className={activeNav === 'your-teams' && 'active'}>
-                  <Link to={`/${org.slug}/`}>{t('Your Teams')}</Link>
-                </li>
-                <li className={activeNav === 'all-teams' && 'active'}>
-                  <Link to={`/organizations/${org.slug}/all-teams/`}>{t('All Teams')} <span className="badge badge-soft">{allTeams.length}</span></Link>
-                </li>
+                <ListLink to={`/organizations/${org.slug}/teams/`}>{t('Your Teams')}</ListLink>
+                <ListLink to={`/organizations/${org.slug}/all-teams/`}>{t('All Teams')} <span className="badge badge-soft">{allTeams.length}</span></ListLink>
               </ul>
               {this.props.children ? /* should be AllTeamsList */
                 React.cloneElement(this.props.children, {

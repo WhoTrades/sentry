@@ -8,9 +8,7 @@ from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _
 
 from sentry import roles
-from sentry.models import (
-    AuditLogEntry, AuditLogEntryEvent, Organization
-)
+from sentry.models import AuditLogEntryEvent, Organization
 from sentry.web.frontend.base import OrganizationView
 
 
@@ -62,8 +60,13 @@ class OrganizationSettingsForm(forms.ModelForm):
         required=False,
     )
     require_scrub_ip_address = forms.BooleanField(
-        label=_('Require not storing IP Addresses'),
-        help_text=_('Require preventing IP addresses from being stored for new events on all projects.'),
+        label=_('Prevent Storing of IP Addresses'),
+        help_text=_('Preventing IP addresses from being stored for new events on all projects.'),
+        required=False
+    )
+    early_adopter = forms.BooleanField(
+        label=_('Early Adopter'),
+        help_text=_('Opt-in to new features before they\'re released to the public.'),
         required=False
     )
 
@@ -95,6 +98,7 @@ class OrganizationSettingsView(OrganizationView):
                 'require_scrub_defaults': bool(organization.get_option('sentry:require_scrub_defaults', False)),
                 'sensitive_fields': '\n'.join(organization.get_option('sentry:sensitive_fields', None) or []),
                 'require_scrub_ip_address': bool(organization.get_option('sentry:require_scrub_ip_address', False)),
+                'early_adopter': bool(organization.flags.early_adopter),
             }
         )
 
@@ -105,6 +109,7 @@ class OrganizationSettingsView(OrganizationView):
             organization.flags.allow_joinleave = form.cleaned_data['allow_joinleave']
             organization.flags.enhanced_privacy = form.cleaned_data['enhanced_privacy']
             organization.flags.disable_shared_issues = not form.cleaned_data['allow_shared_issues']
+            organization.flags.early_adopter = form.cleaned_data['early_adopter']
             organization.save()
 
             for opt in (
@@ -118,10 +123,9 @@ class OrganizationSettingsView(OrganizationView):
                 else:
                     organization.update_option('sentry:%s' % (opt,), value)
 
-            AuditLogEntry.objects.create(
+            self.create_audit_entry(
+                request,
                 organization=organization,
-                actor=request.user,
-                ip_address=request.META['REMOTE_ADDR'],
                 target_object=organization.id,
                 event=AuditLogEntryEvent.ORG_EDIT,
                 data=organization.get_audit_log_data(),
